@@ -253,8 +253,9 @@ function App() {
      }
 
      // 2. Suspended/Invalid Key (Permission Denied / 403)
-     if (errorMessage.includes("Permission denied") || errorMessage.includes("API key not valid") || errorMessage.includes("403")) {
-         setError("API Key hệ thống mặc định đã bị tạm dừng hoặc không hợp lệ. Vui lòng nhập API Key riêng của bạn để tiếp tục.");
+     // Added 'SUSPENDED' and 'suspended' checks here
+     if (errorMessage.includes("Permission denied") || errorMessage.includes("API key not valid") || errorMessage.includes("403") || errorMessage.includes("SUSPENDED") || errorMessage.includes("suspended")) {
+         setError("API Key đã bị Google tạm ngưng (Suspended) hoặc không hợp lệ. Vui lòng tạo Key mới từ Project khác.");
          setIsApiKeyModalOpen(true);
          return;
      }
@@ -339,7 +340,7 @@ function App() {
             analysisResult, 
             redesigns, 
             productType, 
-            designMode,
+            designMode, 
             RopeType.NONE,
             activeTab
          );

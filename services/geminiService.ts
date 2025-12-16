@@ -49,9 +49,12 @@ class KeyManager {
             msg.includes('quota') ||
             error?.status === 403 || // Permission denied (Suspended Key)
             msg.includes('Permission denied') ||
-            msg.includes('API key not valid')
+            msg.includes('API key not valid') ||
+            msg.includes('suspended')
         );
     };
+
+    let lastError: any = null;
 
     // 1. Try Free Keys Loop
     let initialFreeIndex = this.freeIndex;
@@ -67,6 +70,7 @@ class KeyManager {
                 
                 return await operation(key, this.isUserToken(key), false);
             } catch (error: any) {
+                lastError = error;
                 if (shouldRotate(error)) {
                     console.warn(`Free Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating to next...`);
                     continue; // Try next key
@@ -90,12 +94,21 @@ class KeyManager {
                  // Pass isPaidPool=true. 
                  return await operation(key, this.isUserToken(key), true);
              } catch (error: any) {
+                 lastError = error;
                  if (shouldRotate(error)) {
                      console.warn(`Paid Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating...`);
                      continue;
                  }
                  throw error;
              }
+        }
+    }
+
+    // If we are here, ALL keys failed. Check the last error to give a better message.
+    if (lastError) {
+        const msg = lastError.message || '';
+        if (lastError.status === 403 || msg.includes('suspended') || msg.includes('Permission denied')) {
+            throw new Error("API Key has been SUSPENDED by Google. Please generate a new key from a new project.");
         }
     }
 
