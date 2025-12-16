@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle, AlertCircle, Layers, CreditCard, Zap, Trash2, FileJson, User, HelpCircle } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, Layers, CreditCard, Zap, Trash2, FileJson, User, HelpCircle, Rocket, Clock } from 'lucide-react';
 import { validateToken } from '../services/geminiService';
 
 interface ApiKeyModalProps {
@@ -18,6 +18,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   const [statusMessage, setStatusMessage] = useState('');
   const [detailedError, setDetailedError] = useState<{title: string, advice: string} | null>(null);
   const [detectedUser, setDetectedUser] = useState<{name: string, email: string, image: string} | null>(null);
+  const [tokenExpiry, setTokenExpiry] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -40,6 +41,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
           try {
               const parsed = JSON.parse(storedToken);
               if (parsed.user) setDetectedUser(parsed.user);
+              if (parsed.expires) setTokenExpiry(new Date(parsed.expires).toLocaleString());
           } catch(e) {}
       }
     }
@@ -49,11 +51,18 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
       try {
           if (!tokenJsonInput.trim()) {
               setDetectedUser(null);
+              setTokenExpiry(null);
               return;
           }
-          const parsed = JSON.parse(tokenJsonInput);
-          if (parsed.user) {
-              setDetectedUser(parsed.user);
+          // Attempt to parse JSON immediately for UI feedback
+          let parsed;
+          if (tokenJsonInput.trim().startsWith('{')) {
+              parsed = JSON.parse(tokenJsonInput);
+              if (parsed.user) setDetectedUser(parsed.user);
+              if (parsed.expires) setTokenExpiry(new Date(parsed.expires).toLocaleString());
+          } else if (tokenJsonInput.startsWith('ya29')) {
+             setDetectedUser(null);
+             setTokenExpiry("Token trực tiếp (Không có thông tin hết hạn)");
           }
       } catch (e) {
           // invalid json, ignore
@@ -77,11 +86,16 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     let tokenKey = "";
     if (tokenJsonInput.trim()) {
         try {
-            const parsed = JSON.parse(tokenJsonInput);
-            if (parsed.access_token) tokenKey = parsed.access_token;
-            else if (parsed.token) tokenKey = parsed.token;
-            else if (tokenJsonInput.startsWith('ya29')) tokenKey = tokenJsonInput.trim();
+            // Try parsing as JSON first
+            if (tokenJsonInput.trim().startsWith('{')) {
+                 const parsed = JSON.parse(tokenJsonInput);
+                 if (parsed.access_token) tokenKey = parsed.access_token;
+                 else if (parsed.token) tokenKey = parsed.token;
+            } else if (tokenJsonInput.startsWith('ya29')) {
+                 tokenKey = tokenJsonInput.trim();
+            }
         } catch (e) {
+            // Fallback for raw string
             if (tokenJsonInput.startsWith('ya29')) tokenKey = tokenJsonInput.trim();
         }
     }
@@ -125,8 +139,8 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
       const msg = error.message || '';
       
       if (error.status === 403 || msg.includes('403') || msg.includes('suspended') || msg.includes('Permission denied')) {
-          title = "PROJECT BỊ GOOGLE KHÓA (403 Suspended)";
-          advice = "Dù trên web AI Studio hiển thị trạng thái 'Active' (màu xanh), nhưng Google đã khóa ngầm Project này do vi phạm chính sách hoặc hết hạn Free Tier. Bạn BẮT BUỘC phải tạo Project mới và lấy Key mới.";
+          title = "TOKEN/KEY ĐÃ BỊ CHẶN (403)";
+          advice = "Key hoặc Token này đã hết hạn hoặc bị Google khóa. Nếu dùng Token Labs, hãy lấy lại Token mới (Token thường chỉ sống 1 giờ).";
           isSuspended = true;
       } else if (error.status === 400 || msg.includes('400') || msg.includes('INVALID_ARGUMENT')) {
           title = "KEY KHÔNG HỢP LỆ (400 Bad Request)";
@@ -153,6 +167,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     setPaidKeysInput('');
     setTokenJsonInput('');
     setDetectedUser(null);
+    setTokenExpiry(null);
     setStatus('idle');
     setDetailedError(null);
   };
@@ -215,30 +230,44 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
 
                 <div className="space-y-2">
                    <label className="flex items-center justify-between text-sm font-bold text-slate-300">
-                      <div className="flex items-center">
-                        <FileJson size={14} className="mr-1 text-purple-500" />
-                        Ultra Token JSON
+                      <div className="flex items-center text-purple-400">
+                        <Rocket size={14} className="mr-1" />
+                        Labs / Flow Ultra JSON
                       </div>
                       {detectedUser && (
                           <span className="text-xs text-green-400 flex items-center bg-green-950/30 px-2 py-0.5 rounded border border-green-900">
-                              <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1"></span> Active
+                              <span className="w-1.5 h-1.5 bg-green-500 rounded-full mr-1"></span> Ready
                           </span>
                       )}
                    </label>
                    <textarea 
                       value={tokenJsonInput}
                       onChange={(e) => setTokenJsonInput(e.target.value)}
-                      placeholder='Dán JSON vào đây'
+                      placeholder='Dán toàn bộ JSON từ Labs vào đây:&#10;{"user":..., "access_token":"ya29..."}'
                       className="w-full h-64 p-3 text-xs font-mono bg-slate-950 border border-slate-700 text-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none resize-none placeholder:text-slate-600"
                    />
-                   {detectedUser && (
-                       <div className="flex items-center p-2 bg-slate-800 rounded-lg border border-slate-700 animate-fade-in">
-                           <img src={detectedUser.image} alt="Avatar" className="w-8 h-8 rounded-full mr-3 border border-slate-600" />
-                           <div className="overflow-hidden">
-                               <p className="text-xs font-bold text-white truncate">{detectedUser.name}</p>
-                               <p className="text-[10px] text-slate-400 truncate">{detectedUser.email}</p>
+                   
+                   {/* User Info Card */}
+                   {detectedUser ? (
+                       <div className="flex flex-col space-y-2 p-2 bg-slate-800 rounded-lg border border-slate-700 animate-fade-in">
+                           <div className="flex items-center">
+                               <img src={detectedUser.image} alt="Avatar" className="w-8 h-8 rounded-full mr-3 border border-slate-600" />
+                               <div className="overflow-hidden">
+                                   <p className="text-xs font-bold text-white truncate">{detectedUser.name}</p>
+                                   <p className="text-[10px] text-slate-400 truncate">{detectedUser.email}</p>
+                               </div>
                            </div>
+                           {tokenExpiry && (
+                               <div className="text-[10px] text-amber-400 flex items-center pt-1 border-t border-slate-700">
+                                   <Clock size={10} className="mr-1" />
+                                   Hết hạn: {tokenExpiry}
+                               </div>
+                           )}
                        </div>
+                   ) : (
+                       <p className="text-[10px] text-slate-500 italic px-1">
+                           Hỗ trợ: Token "ya29..." hoặc JSON đầy đủ
+                       </p>
                    )}
                 </div>
             </div>

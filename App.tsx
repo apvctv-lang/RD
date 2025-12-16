@@ -90,7 +90,9 @@ function App() {
        setPaidKeysCount(paid.length);
        setKeyPools(free, paid);
        
-       if (paid.length > 0) setUseUltra(true);
+       // Check for Ultra token
+       const hasUltra = paid.some((k: string) => k.startsWith('ya29'));
+       if (hasUltra) setUseUltra(true);
     }
   }, []);
 
@@ -138,7 +140,9 @@ function App() {
     setPaidKeysCount(paid.length);
     setKeyPools(free, paid);
     
-    if (paid.length > 0) setUseUltra(true);
+    // Update Ultra status
+    const hasUltra = paid.some((k: string) => k.startsWith('ya29'));
+    setUseUltra(hasUltra);
 
     setIsApiKeyModalOpen(false);
     setError(null);
@@ -509,7 +513,7 @@ function App() {
   // --- MAIN APP ---
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col relative overflow-x-hidden text-slate-200">
-      <Header onHistoryClick={() => setIsHistoryOpen(true)} />
+      <Header onHistoryClick={() => setIsHistoryOpen(true)} useUltra={useUltra} />
 
       {/* User & Key Bar */}
       <div className="bg-slate-900 border-b border-slate-800 py-2 px-4 shadow-sm z-30 relative">

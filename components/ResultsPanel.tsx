@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Download, Wand2, Loader2, CheckCircle2, Sparkles, Image as ImageIcon, Settings2, ZoomIn, Shirt } from 'lucide-react';
+import { Download, Wand2, Loader2, CheckCircle2, Sparkles, Image as ImageIcon, Settings2, ZoomIn, Shirt, Scissors } from 'lucide-react';
 import { ProductAnalysis, ProcessStage, AppTab } from '../types';
 
 interface ResultsPanelProps {
@@ -23,7 +23,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   onImageClick
 }) => {
 
-  const downloadImageAs2500px = (e: React.MouseEvent, dataUrl: string, filename: string) => {
+  const downloadImageAs2500px = (e: React.MouseEvent, dataUrl: string, filename: string, removeWhite: boolean = false) => {
     e.stopPropagation(); // Prevent opening the modal when just downloading
     const img = new Image();
     img.src = dataUrl;
@@ -43,9 +43,9 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         // Draw image scaled to 2500x2500
         ctx.drawImage(img, 0, 0, 2500, 2500);
 
-        // --- T-SHIRT MODE SMART REMOVAL ---
-        // If in T-Shirt mode, attempt to remove white background client-side for immediate transparency
-        if (activeTab === AppTab.TSHIRT) {
+        // --- SMART REMOVAL (Transparency) ---
+        // Used for T-Shirt Mode OR if explicitly requested (Cleaned Image)
+        if (activeTab === AppTab.TSHIRT || removeWhite) {
             const imageData = ctx.getImageData(0, 0, 2500, 2500);
             const data = imageData.data;
             const threshold = 220; // Lowered from 240 to catch artifacts
@@ -65,9 +65,8 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         // ---------------------------------
         
         const link = document.createElement('a');
-        // CHANGE: Use 'image/png' to support transparency
         link.href = canvas.toDataURL('image/png');
-        link.download = filename.replace('.jpg', '.png'); // Ensure extension is png
+        link.download = filename.replace(/\.(jpg|jpeg)$/i, '.png'); // Ensure extension is png
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -102,13 +101,22 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                     Cleaned
                   </h3>
                   {processedImage && (
-                    <button
-                      onClick={(e) => downloadImageAs2500px(e, processedImage, 'processed-product-2500px.png')}
-                      className="p-1 text-indigo-400 hover:bg-slate-800 rounded-md transition-colors"
-                      title="Download 2500px PNG"
-                    >
-                      <Download size={16} />
-                    </button>
+                    <div className="flex space-x-1">
+                        <button
+                            onClick={(e) => downloadImageAs2500px(e, processedImage, 'cleaned-product-transparent.png', true)}
+                            className="p-1 text-indigo-400 hover:bg-slate-800 rounded-md transition-colors"
+                            title="Download Transparent PNG"
+                        >
+                            <Scissors size={16} />
+                        </button>
+                        <button
+                            onClick={(e) => downloadImageAs2500px(e, processedImage, 'cleaned-product.jpg', false)}
+                            className="p-1 text-slate-400 hover:bg-slate-800 rounded-md transition-colors"
+                            title="Download JPG (White BG)"
+                        >
+                            <Download size={16} />
+                        </button>
+                    </div>
                   )}
                 </div>
                 {/* Dark checkerboard pattern for transparent images */}
@@ -120,7 +128,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                       {stage === ProcessStage.CLEANING ? (
                         <>
                           <Loader2 className="w-8 h-8 animate-spin mb-2 text-indigo-500" />
-                          <span className="text-xs">Removing background...</span>
+                          <span className="text-xs">Removing background & ropes...</span>
                         </>
                       ) : (
                         <span className="text-xs">Waiting for processing...</span>
@@ -284,7 +292,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                               View & Remix
                             </span>
                             <button 
-                               onClick={(e) => downloadImageAs2500px(e, img, `design-option-2500px-${index + 1}.png`)}
+                               onClick={(e) => downloadImageAs2500px(e, img, `design-option-2500px-${index + 1}.png`, activeTab === AppTab.TSHIRT)}
                                className="bg-indigo-600 backdrop-blur text-white px-4 py-2 rounded-full font-medium text-xs flex items-center hover:bg-indigo-700 transition-colors border border-indigo-500 shadow-lg"
                             >
                               <Download className="w-3 h-3 mr-2" />

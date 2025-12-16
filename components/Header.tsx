@@ -1,11 +1,13 @@
+
 import React from 'react';
-import { Camera, Sparkles, History } from 'lucide-react';
+import { Camera, Sparkles, History, Rocket } from 'lucide-react';
 
 interface HeaderProps {
   onHistoryClick: () => void;
+  useUltra?: boolean; // New Prop
 }
 
-export const Header: React.FC<HeaderProps> = ({ onHistoryClick }) => {
+export const Header: React.FC<HeaderProps> = ({ onHistoryClick, useUltra }) => {
   return (
     <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-40 shadow-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -16,6 +18,11 @@ export const Header: React.FC<HeaderProps> = ({ onHistoryClick }) => {
           <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">
             Team3T AI
           </h1>
+          {useUltra && (
+              <span className="ml-2 px-2 py-0.5 rounded text-[10px] font-bold bg-purple-600 text-white shadow-lg shadow-purple-500/40 flex items-center border border-purple-400 animate-pulse">
+                  <Rocket size={10} className="mr-1" /> PRO ULTRA
+              </span>
+          )}
         </div>
         <div className="flex items-center space-x-4">
           <button 

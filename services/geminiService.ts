@@ -21,6 +21,11 @@ class KeyManager {
     return this.freeKeys.length > 0 || this.paidKeys.length > 0;
   }
 
+  // Check if we have any Ultra tokens (OAuth ya29...) in the paid pool
+  hasUltraToken() {
+      return this.paidKeys.some(k => k.startsWith('ya29'));
+  }
+
   // Helper to determine if a key is a "Token" (OAuth - ya29...)
   isUserToken(key: string) {
     return key && key.startsWith('ya29');
@@ -137,12 +142,17 @@ const getClient = (key: string, isPaidKey: boolean = false) => {
   // Ultra Token Strategy (OAuth2 - ya29...)
   if (key.startsWith('ya29')) {
     const customFetch = (url: RequestInfo | URL, init?: RequestInit) => {
+      // Clean up URL: remove 'key' query param if SDK added it
+      let finalUrl = url instanceof URL ? url : new URL(url.toString());
+      finalUrl.searchParams.delete('key');
+      
       const newInit = { ...init };
       const newHeaders = new Headers(newInit.headers);
       newHeaders.set('Authorization', `Bearer ${key}`);
       newHeaders.delete('x-goog-api-key');
       newInit.headers = newHeaders;
-      return window.fetch(url, newInit);
+      
+      return window.fetch(finalUrl.toString(), newInit);
     };
 
     return new GoogleGenAI({ 
@@ -200,12 +210,12 @@ export const cleanupProductImage = async (imageBase64: string): Promise<string> 
       }
 
       // Updated Prompt: Strict instruction for White Background and Removing Ropes
-      const prompt = `Professional Product Photography Editing Task:
-      1. Isolate the main product on a pure solid WHITE background (Hex #FFFFFF).
-      2. CRITICAL: ERASE ALL hanging strings, loops, hooks, wires, and attachments used to suspend the object. The object must appear to float freely or stand on its own.
-      3. Do NOT crop any part of the main product. Keep it complete.
-      4. Maintain high resolution and sharp edge details.
-      5. Output ONLY the processed image.`;
+      const prompt = `Image Editing Task:
+      1. Object Isolation: Isolate the main product on a pure solid WHITE background (Hex #FFFFFF).
+      2. STRING REMOVAL: COMPLETELY ERASE any hanging strings, jute ropes, ribbons, hooks, or wires attached to the object. The object must appear as if it is floating or resting on its own.
+      3. Hole Filling: If removing the string leaves a hole, make it look natural or fill it subtly if appropriate for the object type (like a flat ornament).
+      4. Integrity: Do NOT crop the product. Keep edges sharp.
+      5. Output: Return ONLY the image.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
@@ -239,10 +249,11 @@ export const analyzeProductDesign = async (
     return keyManager.executeWithRetry(async (key, isUltra, isPaidPool) => {
         const ai = getClient(key, isPaidPool);
         
-        // Strategy: Ultra Token gets Pro. Others get Flash.
-        // OPTIMIZATION: For T-Shirt mode, ALWAYS use 'gemini-2.5-flash' (standard) to avoid 503 on Pro and speed up prompt gen.
+        // Strategy: 
+        // If Ultra/Paid -> Use Pro (better analysis)
+        // If Free -> Use Flash (faster, cheaper)
         let activeModel = 'gemini-2.5-flash';
-        if (activeTab !== AppTab.TSHIRT && (isUltra || isPaidPool)) {
+        if (isUltra || isPaidPool) {
              activeModel = 'gemini-3-pro-preview';
         }
 
@@ -324,7 +335,7 @@ export const analyzeProductDesign = async (
             } as ProductAnalysis;
 
         } catch (error: any) {
-            // Fallback logic if Pro model fails
+            // Fallback logic if Pro model fails (503 or 429)
             if (activeModel !== 'gemini-2.5-flash') {
                 console.warn(`Pro model failed (${error.status || 'Error'}), falling back to Flash on same key.`);
                 const response = await ai.models.generateContent({
@@ -448,13 +459,26 @@ export const generateProductRedesigns = async (
     // --- GENERATION STRATEGY ---
     const count = activeTab === AppTab.TSHIRT ? 3 : 6; // 3 for Tshirt, 6 for POD
     
-    // Helper: Execute a single generation via Flash Image (General Quota)
-    const runFlashGen = async (key: string, isPaidPool: boolean) => {
+    // Helper: Execute a single generation via Flash Image or Pro Image
+    const runGen = async (key: string, isPaidPool: boolean) => {
          const ai = getClient(key, isPaidPool);
+         
+         // SMART MODEL SELECTION:
+         // If key is Paid Pool or Ultra -> Attempt 'gemini-3-pro-image-preview' for best quality.
+         // Else -> Force 'gemini-2.5-flash-image' for Free tier compatibility.
+         const modelName = isPaidPool ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+         
+         // If using Pro, add image config for better quality
+         const config = modelName === 'gemini-3-pro-image-preview' ? {
+             imageConfig: { imageSize: '2K', aspectRatio: '1:1' }
+         } : {};
+
          const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
-            contents: { parts: [{ text: finalPrompt }] }
+            model: modelName,
+            contents: { parts: [{ text: finalPrompt }] },
+            config: config
          });
+         
          for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData && part.inlineData.data) {
                 return `data:image/png;base64,${part.inlineData.data}`;
@@ -464,26 +488,26 @@ export const generateProductRedesigns = async (
     };
 
     // ULTRA TOKEN PATH (Parallel Batching + General Quota)
-    if (keyManager['paidKeys'].some(k => k.startsWith('ya29'))) {
+    if (keyManager.hasUltraToken()) {
          return keyManager.executeWithRetry(async (key, isUltra, isPaidPool) => {
              // Only apply this logic if it is indeed an Ultra Token
              if (isUltra) {
-                 console.log("Using Ultra Token Strategy: Parallel Batching with Flash Image");
+                 console.log("Using Ultra Token Strategy: Parallel Batching with Smart Model Selection");
                  
                  // If count is 3, just one batch
                  if (count === 3) {
-                     const batch = [runFlashGen(key, true), runFlashGen(key, true), runFlashGen(key, true)];
+                     const batch = [runGen(key, true), runGen(key, true), runGen(key, true)];
                      const results = await Promise.all(batch);
                      return results.filter(r => r !== null) as string[];
                  }
 
                  // If count is 6, do 2 batches
-                 const batch1Promises = [runFlashGen(key, true), runFlashGen(key, true), runFlashGen(key, true)];
+                 const batch1Promises = [runGen(key, true), runGen(key, true), runGen(key, true)];
                  const results1 = await Promise.all(batch1Promises);
                  
                  await sleep(500); 
 
-                 const batch2Promises = [runFlashGen(key, true), runFlashGen(key, true), runFlashGen(key, true)];
+                 const batch2Promises = [runGen(key, true), runGen(key, true), runGen(key, true)];
                  const results2 = await Promise.all(batch2Promises);
                  
                  const allResults = [...results1, ...results2].filter(r => r !== null) as string[];
@@ -516,11 +540,17 @@ async function standardSequentialGeneration(prompt: string, count: number): Prom
                  await sleep(isPaidPool ? 2500 : 2000); 
              }
 
-             // FORCE USE OF GEMINI 2.5 FLASH IMAGE (Free Tier Compatible)
-             // We removed the Imagen 4.0 try/catch block because it requires Billing.
+             // SMART SELECTION FOR STANDARD POOL
+             const modelName = isPaidPool ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+             
+             const config = modelName === 'gemini-3-pro-image-preview' ? {
+                 imageConfig: { imageSize: '2K', aspectRatio: '1:1' }
+             } : {};
+
              const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: { parts: [{ text: prompt }] }
+                model: modelName,
+                contents: { parts: [{ text: prompt }] },
+                config: config
              });
              for (const part of response.candidates?.[0]?.content?.parts || []) {
                 if (part.inlineData && part.inlineData.data) {
@@ -546,8 +576,11 @@ export const remixProductImage = async (imageBase64: string, instruction: string
         const ai = getClient(key, isPaidPool);
         if (!isUltra) await sleep(isPaidPool ? 500 : 1000);
         
+        // Use Flash for Remix to be fast, Pro for quality if Paid
+        const modelName = isPaidPool ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
+
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image',
+            model: modelName,
             contents: {
                 parts: [
                     { inlineData: { mimeType: "image/jpeg", data: stripBase64Prefix(imageBase64) } },
