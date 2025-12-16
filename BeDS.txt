@@ -1,0 +1,173 @@
+
+// --- CẤU HÌNH ---
+// Bạn có thể đặt ID Sheet cụ thể hoặc để null để lấy Sheet hiện tại (nơi chứa Script này)
+// Nếu dùng ActiveSpreadsheet, hãy đảm bảo bạn dán code này vào Script Editor của Sheet đó.
+var SPECIFIC_SHEET_ID = null; // Ví dụ: "17MqtANWPCsYgF0lUV3I356ejjVgasJhftHI_sAIbroM" hoặc để null
+var FOLDER_NAME = "ProductPerfect_Images"; // Tên thư mục trên Drive
+
+function doPost(e) {
+  var lock = LockService.getScriptLock();
+  lock.tryLock(30000); // Tăng thời gian chờ lên 30s vì upload ảnh lâu
+
+  try {
+    var doc = SPECIFIC_SHEET_ID ? SpreadsheetApp.openById(SPECIFIC_SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
+    
+    // Parse dữ liệu gửi lên
+    var requestData = JSON.parse(e.postData.contents);
+    var action = requestData.action;
+    var result = { status: 'error', message: 'Invalid action' };
+
+    if (action === 'register') {
+      result = handleRegister(doc, requestData);
+    } else if (action === 'login') {
+      result = handleLogin(doc, requestData);
+    } else if (action === 'log_design') {
+      result = handleLogDesign(doc, requestData);
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ 'status': 'error', 'message': err.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function doGet(e) {
+  return ContentService
+    .createTextOutput(JSON.stringify({ 'status': 'success', 'message': 'Server is running' }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// --- XỬ LÝ AUTHENTICATION ---
+
+function handleRegister(doc, data) {
+  var sheet = doc.getSheetByName('Users');
+  if (!sheet) {
+    sheet = doc.insertSheet('Users');
+    // Added Permissions column
+    sheet.appendRow(['Username', 'Password', 'Created At', 'Permissions']);
+  }
+
+  var username = data.username ? data.username.toString().trim() : "";
+  var password = data.password ? data.password.toString().trim() : "";
+
+  if (!username || !password) return { status: 'error', message: 'Thiếu thông tin đăng ký' };
+
+  var users = sheet.getDataRange().getValues();
+  for (var i = 1; i < users.length; i++) {
+    if (users[i][0] == username) {
+      return { status: 'error', message: 'Tài khoản đã tồn tại!' };
+    }
+  }
+
+  // Default Permission: POD
+  sheet.appendRow([username, password, new Date(), 'POD']);
+  return { status: 'success', message: 'Đăng ký thành công!' };
+}
+
+function handleLogin(doc, data) {
+  var sheet = doc.getSheetByName('Users');
+  if (!sheet) return { status: 'error', message: 'Chưa có dữ liệu người dùng.' };
+
+  var username = data.username ? data.username.toString().trim() : "";
+  var password = data.password ? data.password.toString().trim() : "";
+
+  var users = sheet.getDataRange().getValues();
+  // Ensure we read enough columns to get permissions (Col 4, index 3)
+  for (var i = 1; i < users.length; i++) {
+    if (users[i][0] == username && users[i][1] == password) {
+      var perms = "ALL"; // Default
+      if (users[i].length > 3 && users[i][3]) {
+          perms = users[i][3].toString();
+      }
+      return { 
+        status: 'success', 
+        message: 'Đăng nhập thành công!',
+        user: { 
+          username: username,
+          permissions: perms
+        }
+      };
+    }
+  }
+
+  return { status: 'error', message: 'Sai tên đăng nhập hoặc mật khẩu.' };
+}
+
+// --- XỬ LÝ LƯU DESIGN & UPLOAD ẢNH ---
+
+function handleLogDesign(doc, data) {
+  var sheet = doc.getSheetByName('Designs');
+  if (!sheet) {
+    sheet = doc.insertSheet('Designs');
+    // Header: Thời gian, User, Prompt, Mô tả, Link Ảnh 1 -> 6
+    sheet.appendRow(['Timestamp', 'Username', 'Prompt', 'Description', 'Image 1', 'Image 2', 'Image 3', 'Image 4', 'Image 5', 'Image 6']);
+  }
+
+  // 1. Lấy hoặc tạo thư mục Drive
+  var folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  var folder;
+  if (folders.hasNext()) {
+    folder = folders.next();
+  } else {
+    folder = DriveApp.createFolder(FOLDER_NAME);
+  }
+
+  // 2. Upload Ảnh
+  var imageUrls = [];
+  var images = data.images || [];
+  var timestamp = new Date();
+  var username = data.username || 'Anonymous';
+
+  // Giới hạn tối đa 6 ảnh để tránh timeout (Apps Script chạy tối đa 6 phút, nhưng request web app chờ ít hơn)
+  for (var i = 0; i < 6; i++) {
+    if (i < images.length && images[i]) {
+      try {
+        // Ảnh gửi lên dạng "data:image/png;base64,..."
+        var base64Data = images[i].split(",")[1]; 
+        if (!base64Data) base64Data = images[i]; // Phòng trường hợp gửi raw base64
+
+        var decodedBlob = Utilities.base64Decode(base64Data);
+        var fileName = username + "_Option_" + (i+1) + "_" + timestamp.getTime() + ".png";
+        
+        // Tạo file
+        var file = folder.createFile(Utilities.newBlob(decodedBlob, "image/png", fileName));
+        
+        // Phân quyền: Ai có link cũng xem được (Quan trọng để hiển thị trên web/sheet)
+        file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+        
+        // Lấy link download/view
+        imageUrls.push(file.getUrl()); 
+
+      } catch (err) {
+        imageUrls.push("Error: " + err.toString());
+      }
+    } else {
+      imageUrls.push(""); // Ô trống nếu không có ảnh
+    }
+  }
+
+  // 3. Ghi vào Sheet
+  var rowData = [
+    timestamp,
+    username,
+    data.prompt,
+    data.description,
+    imageUrls[0],
+    imageUrls[1],
+    imageUrls[2],
+    imageUrls[3],
+    imageUrls[4],
+    imageUrls[5]
+  ];
+
+  sheet.appendRow(rowData);
+
+  return { status: 'success', message: 'Đã lưu thiết kế và upload ảnh thành công!' };
+}
