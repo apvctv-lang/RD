@@ -304,9 +304,14 @@ function App() {
       const analysisResult = await analyzeProductDesign(image, productType, designMode, activeTab);
       setAnalysis(analysisResult);
 
-      // 3. Extract (Skip for Tshirt to save tokens/speed, or keep if useful?)
-      const extracted = await extractDesignElements(image);
-      setExtractedElements(extracted);
+      // 3. Extract (Optional and Fail-Safe)
+      // Wrap in try-catch so it doesn't kill the flow if 429 happens
+      try {
+          const extracted = await extractDesignElements(image);
+          setExtractedElements(extracted);
+      } catch (extractError) {
+          console.warn("Extraction failed silently:", extractError);
+      }
       
       // 4. Generate
       if (analysisResult && analysisResult.redesignPrompt) {

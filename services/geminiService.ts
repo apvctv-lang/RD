@@ -73,6 +73,8 @@ class KeyManager {
                 lastError = error;
                 if (shouldRotate(error)) {
                     console.warn(`Free Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating to next...`);
+                    // IMPORTANT: Add delay before trying next key to avoid rapid-fire bans
+                    await sleep(2000); 
                     continue; // Try next key
                 }
                 // If it's another error (e.g. 400 Bad Request), don't rotate, just fail
@@ -97,6 +99,7 @@ class KeyManager {
                  lastError = error;
                  if (shouldRotate(error)) {
                      console.warn(`Paid Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating...`);
+                     await sleep(1500);
                      continue;
                  }
                  throw error;
@@ -339,10 +342,9 @@ export const analyzeProductDesign = async (
 
 // 5. Extract Elements
 export const extractDesignElements = async (imageBase64: string): Promise<string[]> => {
+  // REDUCED QUOTA CONSUMPTION: Only 1 prompt instead of 3.
   const prompts = [
-    "Crop and isolate the main CHARACTER or central figure.",
-    "Crop and isolate the BACKGROUND PATTERN.",
-    "Crop and isolate any TEXT or LOGO elements."
+    "Crop and isolate the main CHARACTER or central figure."
   ];
 
   const results: string[] = [];
@@ -371,7 +373,10 @@ export const extractDesignElements = async (imageBase64: string): Promise<string
             return null;
         });
         if (img) results.push(img);
-      } catch (e) { console.error("Extraction partial fail", e); }
+      } catch (e) { 
+          console.error("Extraction partial fail (Ignored to save flow)", e); 
+          // Do not throw here, allow the app to continue even if extraction fails
+      }
   }
   return results;
 };
