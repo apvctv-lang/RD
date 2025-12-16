@@ -39,6 +39,20 @@ class KeyManager {
        return operation(envKey, this.isUserToken(envKey), false);
     }
 
+    // Helper to check if error warrants rotation (Rate Limit OR Permission/Suspended)
+    const shouldRotate = (error: any) => {
+        const msg = error?.message || '';
+        return (
+            error?.status === 429 || 
+            error?.code === 429 || 
+            msg.includes('429') || 
+            msg.includes('quota') ||
+            error?.status === 403 || // Permission denied (Suspended Key)
+            msg.includes('Permission denied') ||
+            msg.includes('API key not valid')
+        );
+    };
+
     // 1. Try Free Keys Loop
     let initialFreeIndex = this.freeIndex;
     if (this.freeKeys.length > 0) {
@@ -53,18 +67,15 @@ class KeyManager {
                 
                 return await operation(key, this.isUserToken(key), false);
             } catch (error: any) {
-                // Check if error is Rate Limit (429) or Quota Exceeded
-                const isRateLimit = error?.status === 429 || error?.code === 429 || (error?.message && (error.message.includes('429') || error.message.includes('quota')));
-                
-                if (isRateLimit) {
-                    console.warn(`Free Key ${currentKeyIndex} rate limited. Rotating to next...`);
+                if (shouldRotate(error)) {
+                    console.warn(`Free Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating to next...`);
                     continue; // Try next key
                 }
                 // If it's another error (e.g. 400 Bad Request), don't rotate, just fail
                 throw error;
             }
         }
-        console.warn("All Free Keys exhausted/rate-limited. Switching to Paid Pool.");
+        console.warn("All Free Keys exhausted/rate-limited/suspended. Switching to Paid Pool.");
     }
 
     // 2. Try Paid Keys Loop (Failover)
@@ -79,9 +90,8 @@ class KeyManager {
                  // Pass isPaidPool=true. 
                  return await operation(key, this.isUserToken(key), true);
              } catch (error: any) {
-                 const isRateLimit = error?.status === 429 || error?.code === 429 || (error?.message && (error.message.includes('429') || error.message.includes('quota')));
-                 if (isRateLimit) {
-                     console.warn(`Paid Key ${currentKeyIndex} rate limited. Rotating...`);
+                 if (shouldRotate(error)) {
+                     console.warn(`Paid Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating...`);
                      continue;
                  }
                  throw error;
@@ -89,7 +99,7 @@ class KeyManager {
         }
     }
 
-    throw new Error("All API Keys (Free & Paid) are currently rate limited. Please wait.");
+    throw new Error("All API Keys (Free & Paid) are currently unavailable (Rate Limited or Suspended). Please wait or check your keys.");
   }
 }
 

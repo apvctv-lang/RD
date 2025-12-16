@@ -244,13 +244,22 @@ function App() {
 
   const handleQuotaError = (err: any) => {
      const errorMessage = err.message || err.toString();
-     // Check for missing keys explicitly
+     
+     // 1. Missing Keys
      if (errorMessage.includes("No API Keys configured")) {
          setError("Chưa cấu hình API Key. Vui lòng thêm Key để sử dụng.");
          setIsApiKeyModalOpen(true);
          return;
      }
 
+     // 2. Suspended/Invalid Key (Permission Denied / 403)
+     if (errorMessage.includes("Permission denied") || errorMessage.includes("API key not valid") || errorMessage.includes("403")) {
+         setError("API Key hệ thống mặc định đã bị tạm dừng hoặc không hợp lệ. Vui lòng nhập API Key riêng của bạn để tiếp tục.");
+         setIsApiKeyModalOpen(true);
+         return;
+     }
+
+     // 3. Quota / Rate Limit
      const isQuotaError = errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURSE_EXHAUSTED');
      if (isQuotaError && !hasKeys) {
          setError("Dung lượng miễn phí mặc định đã hết hoặc bị giới hạn. Vui lòng thêm API Key riêng.");
