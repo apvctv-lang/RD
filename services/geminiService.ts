@@ -494,42 +494,26 @@ async function standardSequentialGeneration(prompt: string, count: number): Prom
         const img = await keyManager.executeWithRetry(async (key, isUltra, isPaidPool) => {
              const ai = getClient(key, isPaidPool);
              
-             // Paid API Key (AIza) Sleep
              if (!isUltra) {
                  await sleep(isPaidPool ? 2500 : 2000); 
              }
 
-             // Flash Generation Function
-             const runFlash = async () => {
-                 const response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash-image',
-                    contents: { parts: [{ text: prompt }] }
-                 });
-                 for (const part of response.candidates?.[0]?.content?.parts || []) {
-                    if (part.inlineData && part.inlineData.data) {
-                        return `data:image/png;base64,${part.inlineData.data}`;
-                    }
-                 }
-                 return null;
-             };
-
-             // Try Imagen 4.0 first (if available/quota allows)
-             try {
-                 const response = await ai.models.generateImages({
-                    model: 'imagen-4.0-generate-001',
-                    prompt: prompt,
-                    config: { numberOfImages: 1, aspectRatio: '1:1', outputMimeType: 'image/jpeg' }
-                 });
-                 
-                 if(response.generatedImages?.[0]?.image?.imageBytes) {
-                    return `data:image/jpeg;base64,${response.generatedImages[0].image.imageBytes}`;
-                 }
-                 throw new Error("No image data");
-             } catch (err: any) {
-                 console.warn(`Imagen failed, falling back to Flash: ${err.message}`);
-                 return await runFlash();
+             // FORCE USE OF GEMINI 2.5 FLASH IMAGE (Free Tier Compatible)
+             // We removed the Imagen 4.0 try/catch block because it requires Billing.
+             const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image',
+                contents: { parts: [{ text: prompt }] }
+             });
+             for (const part of response.candidates?.[0]?.content?.parts || []) {
+                if (part.inlineData && part.inlineData.data) {
+                    return `data:image/png;base64,${part.inlineData.data}`;
+                }
              }
-        }).catch(e => null);
+             return null;
+        }).catch(e => {
+            console.warn("Generation failed", e);
+            return null;
+        });
         
         if (img) results.push(img);
     }
