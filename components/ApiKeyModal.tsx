@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { X, CheckCircle, AlertCircle, Layers, CreditCard, Zap, Trash2, FileJson, User } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, Layers, CreditCard, Zap, Trash2, FileJson, User, HelpCircle } from 'lucide-react';
 import { validateToken } from '../services/geminiService';
 
 interface ApiKeyModalProps {
@@ -16,19 +16,20 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
   
   const [status, setStatus] = useState<'idle' | 'validating' | 'success' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
+  const [detailedError, setDetailedError] = useState<{title: string, advice: string} | null>(null);
   const [detectedUser, setDetectedUser] = useState<{name: string, email: string, image: string} | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setStatus('idle');
       setStatusMessage('');
+      setDetailedError(null);
       
       const storedFree = localStorage.getItem('gemini_pool_free');
       const storedPaid = localStorage.getItem('gemini_pool_paid');
       const storedToken = localStorage.getItem('gemini_raw_token_json');
       
       if (storedFree) setFreeKeysInput(JSON.parse(storedFree).join('\n'));
-      // Filter out the token from the paid list for display purposes if we have the raw json
       if (storedPaid) {
           const paidList = JSON.parse(storedPaid);
           const cleanPaidList = paidList.filter((k: string) => !k.startsWith('ya29'));
@@ -44,7 +45,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     }
   }, [isOpen]);
 
-  // Auto-detect user info when pasting JSON
   useEffect(() => {
       try {
           if (!tokenJsonInput.trim()) {
@@ -64,43 +64,31 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
 
   const extractKeys = (input: string): string[] => {
     return input
-      .split(/[\n,]+/) // Split by newline or comma
+      .split(/[\n,]+/)
       .map(k => k.trim())
-      .filter(k => k.length > 10 && !k.startsWith('ya29')); // Exclude tokens from manual entry if possible
+      .filter(k => k.length > 10 && !k.startsWith('ya29'));
   };
 
   const handleSave = async () => {
+    setDetailedError(null);
     const freeKeys = extractKeys(freeKeysInput);
     const manualPaidKeys = extractKeys(paidKeysInput);
     
     let tokenKey = "";
-    // Parse Token JSON
     if (tokenJsonInput.trim()) {
         try {
             const parsed = JSON.parse(tokenJsonInput);
-            if (parsed.access_token) {
-                tokenKey = parsed.access_token;
-            } else if (parsed.token) {
-                 tokenKey = parsed.token;
-            } else {
-                 // Maybe they pasted just the token string?
-                 if (tokenJsonInput.startsWith('ya29')) {
-                     tokenKey = tokenJsonInput.trim();
-                 }
-            }
+            if (parsed.access_token) tokenKey = parsed.access_token;
+            else if (parsed.token) tokenKey = parsed.token;
+            else if (tokenJsonInput.startsWith('ya29')) tokenKey = tokenJsonInput.trim();
         } catch (e) {
-            // Not JSON, check if it's a raw token string
-            if (tokenJsonInput.startsWith('ya29')) {
-                tokenKey = tokenJsonInput.trim();
-            }
+            if (tokenJsonInput.startsWith('ya29')) tokenKey = tokenJsonInput.trim();
         }
     }
 
-    // Combine manual paid keys + token
     const finalPaidKeys = [...manualPaidKeys];
     if (tokenKey) {
         finalPaidKeys.push(tokenKey);
-        // Save raw JSON for persistence
         localStorage.setItem('gemini_raw_token_json', tokenJsonInput);
     } else {
         localStorage.removeItem('gemini_raw_token_json');
@@ -115,27 +103,47 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     setStatus('validating');
     setStatusMessage(`Đang kiểm tra kết nối...`);
 
-    // Validation Priority: Token -> Paid -> Free
     const keyToTest = tokenKey || manualPaidKeys[0] || freeKeys[0];
 
     try {
       await validateToken(keyToTest);
       
       setStatus('success');
-      setStatusMessage(`Đã kết nối: ${freeKeys.length} Free, ${manualPaidKeys.length} Paid, ${tokenKey ? '1 Ultra Token' : '0 Token'}.`);
+      setStatusMessage(`Kết nối thành công! Sẵn sàng sử dụng.`);
       
       setTimeout(() => {
         onSave(freeKeys, finalPaidKeys);
-      }, 1000);
+      }, 800);
 
     } catch (error: any) {
       console.error("Validation failed", error);
-      const confirm = window.confirm("Kiểm tra kết nối thất bại (Key/Token có thể bị lỗi). Bạn có chắc chắn muốn lưu không?");
-      if (confirm) {
-         onSave(freeKeys, finalPaidKeys);
-      } else {
-         setStatus('error');
-         setStatusMessage('Lỗi: ' + (error.message || 'Kết nối thất bại'));
+      
+      let title = "Kết nối thất bại";
+      let advice = "Vui lòng kiểm tra lại Key.";
+      let isSuspended = false;
+
+      const msg = error.message || '';
+      
+      if (error.status === 403 || msg.includes('403') || msg.includes('suspended') || msg.includes('Permission denied')) {
+          title = "PROJECT BỊ GOOGLE KHÓA (403 Suspended)";
+          advice = "Dù trên web AI Studio hiển thị trạng thái 'Active' (màu xanh), nhưng Google đã khóa ngầm Project này do vi phạm chính sách hoặc hết hạn Free Tier. Bạn BẮT BUỘC phải tạo Project mới và lấy Key mới.";
+          isSuspended = true;
+      } else if (error.status === 400 || msg.includes('400') || msg.includes('INVALID_ARGUMENT')) {
+          title = "KEY KHÔNG HỢP LỆ (400 Bad Request)";
+          advice = "Key bị sai định dạng hoặc copy thiếu ký tự. Hãy kiểm tra lại.";
+      } else if (error.status === 429 || msg.includes('429')) {
+          title = "HẾT QUOTA (429 Rate Limit)";
+          advice = "Key này đã hết lượt dùng miễn phí hôm nay/phút này. Hãy thử Key khác.";
+      }
+
+      setDetailedError({ title, advice });
+      setStatus('error');
+      setStatusMessage(title);
+
+      // Nếu không phải lỗi Suspended nghiêm trọng, cho phép lưu cưỡng bức
+      if (!isSuspended) {
+          const confirm = window.confirm(`${title}\n\n${advice}\n\nBạn có muốn lưu không?`);
+          if (confirm) onSave(freeKeys, finalPaidKeys);
       }
     }
   };
@@ -146,6 +154,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
     setTokenJsonInput('');
     setDetectedUser(null);
     setStatus('idle');
+    setDetailedError(null);
   };
 
   return (
@@ -154,7 +163,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
       <div className="flex min-h-full items-center justify-center p-4">
         <div className="relative transform overflow-hidden rounded-2xl bg-slate-900 shadow-2xl transition-all w-full max-w-4xl animate-fade-in border border-slate-800">
           
-          {/* Header */}
           <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4 bg-slate-900">
             <h3 className="text-lg font-bold text-slate-200 flex items-center">
               <Layers className="w-5 h-5 mr-2 text-indigo-500" />
@@ -169,7 +177,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
             
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 
-                {/* Column 1: Free Keys */}
                 <div className="space-y-2">
                    <label className="flex items-center justify-between text-sm font-bold text-slate-300">
                       <div className="flex items-center">
@@ -188,7 +195,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                    />
                 </div>
 
-                {/* Column 2: Paid API Keys */}
                  <div className="space-y-2">
                    <label className="flex items-center justify-between text-sm font-bold text-slate-300">
                       <div className="flex items-center">
@@ -207,7 +213,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                    />
                 </div>
 
-                {/* Column 3: Ultra Token (NEW) */}
                 <div className="space-y-2">
                    <label className="flex items-center justify-between text-sm font-bold text-slate-300">
                       <div className="flex items-center">
@@ -223,7 +228,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                    <textarea 
                       value={tokenJsonInput}
                       onChange={(e) => setTokenJsonInput(e.target.value)}
-                      placeholder='Dán toàn bộ JSON vào đây:&#10;{"user":..., "access_token":"ya29..."}'
+                      placeholder='Dán JSON vào đây'
                       className="w-full h-64 p-3 text-xs font-mono bg-slate-950 border border-slate-700 text-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none resize-none placeholder:text-slate-600"
                    />
                    {detectedUser && (
@@ -238,28 +243,32 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                 </div>
             </div>
 
-            {/* Status Bar */}
-            {status !== 'idle' && (
-               <div className={`p-3 rounded-lg flex items-center ${status === 'error' ? 'bg-red-950/30 text-red-400 border border-red-900' : 'bg-green-950/30 text-green-400 border border-green-900'}`}>
+            {/* ERROR DETAILS BOX */}
+            {detailedError && (
+              <div className="p-4 bg-red-950/40 border border-red-900 rounded-xl animate-fade-in flex items-start">
+                  <AlertCircle className="w-6 h-6 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
+                  <div>
+                      <h4 className="font-bold text-red-400 text-sm">{detailedError.title}</h4>
+                      <p className="text-red-200/80 text-xs mt-1 leading-relaxed">{detailedError.advice}</p>
+                  </div>
+              </div>
+            )}
+
+            {/* Status Bar (Non-Error) */}
+            {status !== 'idle' && status !== 'error' && (
+               <div className={`p-3 rounded-lg flex items-center ${status === 'success' ? 'bg-green-950/30 text-green-400 border border-green-900' : 'bg-indigo-950/30 text-indigo-400 border border-indigo-900'}`}>
                   {status === 'validating' && <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />}
                   {status === 'success' && <CheckCircle size={18} className="mr-2" />}
-                  {status === 'error' && <AlertCircle size={18} className="mr-2" />}
                   <span className="font-medium text-sm">{statusMessage}</span>
                </div>
             )}
 
             <div className="flex justify-between items-center pt-4 border-t border-slate-800">
-              <button
-                onClick={clearAll}
-                className="text-xs text-slate-500 hover:text-red-400 flex items-center transition-colors"
-              >
+              <button onClick={clearAll} className="text-xs text-slate-500 hover:text-red-400 flex items-center transition-colors">
                 <Trash2 size={14} className="mr-1" /> Xóa tất cả
               </button>
               <div className="flex space-x-3">
-                <button
-                    onClick={onClose}
-                    className="px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800 rounded-lg transition-colors"
-                >
+                <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-400 hover:bg-slate-800 rounded-lg transition-colors">
                     Đóng
                 </button>
                 <button
@@ -267,7 +276,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose, onSav
                     disabled={status === 'validating'}
                     className="px-6 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 shadow-sm shadow-indigo-500/20"
                 >
-                    Lưu & Kết nối
+                    {status === 'error' ? 'Thử lại' : 'Lưu & Kết nối'}
                 </button>
               </div>
             </div>
