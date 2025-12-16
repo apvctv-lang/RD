@@ -306,11 +306,14 @@ function App() {
 
       // 3. Extract (Optional and Fail-Safe)
       // Wrap in try-catch so it doesn't kill the flow if 429 happens
-      try {
-          const extracted = await extractDesignElements(image);
-          setExtractedElements(extracted);
-      } catch (extractError) {
-          console.warn("Extraction failed silently:", extractError);
+      // UPDATE: Completely skip extraction for T-Shirt mode to avoid unnecessary quota usage and errors
+      if (activeTab !== AppTab.TSHIRT) {
+          try {
+              const extracted = await extractDesignElements(image);
+              setExtractedElements(extracted);
+          } catch (extractError) {
+              console.warn("Extraction failed silently:", extractError);
+          }
       }
       
       // 4. Generate

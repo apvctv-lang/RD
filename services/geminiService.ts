@@ -39,7 +39,7 @@ class KeyManager {
        return operation(envKey, this.isUserToken(envKey), false);
     }
 
-    // Helper to check if error warrants rotation (Rate Limit OR Permission/Suspended)
+    // Helper to check if error warrants rotation (Rate Limit OR Permission/Suspended OR Overloaded)
     const shouldRotate = (error: any) => {
         const msg = error?.message || '';
         return (
@@ -47,6 +47,10 @@ class KeyManager {
             error?.code === 429 || 
             msg.includes('429') || 
             msg.includes('quota') ||
+            error?.status === 503 || // Service Unavailable / Overloaded
+            error?.code === 503 ||
+            msg.includes('503') ||
+            msg.includes('overloaded') ||
             error?.status === 403 || // Permission denied (Suspended Key)
             msg.includes('Permission denied') ||
             msg.includes('API key not valid') ||
@@ -72,9 +76,10 @@ class KeyManager {
             } catch (error: any) {
                 lastError = error;
                 if (shouldRotate(error)) {
-                    console.warn(`Free Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating to next...`);
+                    const isOverloaded = error?.status === 503 || (error?.message && error.message.includes('503'));
+                    console.warn(`Free Key ${currentKeyIndex} failed (${error.status || 'Error'}). ${isOverloaded ? 'Model Overloaded' : 'Rate Limited'}. Rotating...`);
                     // IMPORTANT: Add delay before trying next key to avoid rapid-fire bans
-                    await sleep(2000); 
+                    await sleep(isOverloaded ? 3000 : 2000); 
                     continue; // Try next key
                 }
                 // If it's another error (e.g. 400 Bad Request), don't rotate, just fail
@@ -98,8 +103,9 @@ class KeyManager {
              } catch (error: any) {
                  lastError = error;
                  if (shouldRotate(error)) {
+                     const isOverloaded = error?.status === 503 || (error?.message && error.message.includes('503'));
                      console.warn(`Paid Key ${currentKeyIndex} failed (${error.status || 'Error'}). Rotating...`);
-                     await sleep(1500);
+                     await sleep(isOverloaded ? 2500 : 1500);
                      continue;
                  }
                  throw error;
@@ -112,6 +118,9 @@ class KeyManager {
         const msg = lastError.message || '';
         if (lastError.status === 403 || msg.includes('suspended') || msg.includes('Permission denied')) {
             throw new Error("API Key has been SUSPENDED by Google. Please generate a new key from a new project.");
+        }
+        if (lastError.status === 503 || msg.includes('503')) {
+             throw new Error("Google Gemini Service is currently overloaded (503). Please try again in a few moments.");
         }
     }
 
@@ -231,7 +240,11 @@ export const analyzeProductDesign = async (
         const ai = getClient(key, isPaidPool);
         
         // Strategy: Ultra Token gets Pro. Others get Flash.
-        let activeModel = (isUltra || isPaidPool) ? 'gemini-3-pro-preview' : 'gemini-2.5-flash';
+        // OPTIMIZATION: For T-Shirt mode, ALWAYS use 'gemini-2.5-flash' (standard) to avoid 503 on Pro and speed up prompt gen.
+        let activeModel = 'gemini-2.5-flash';
+        if (activeTab !== AppTab.TSHIRT && (isUltra || isPaidPool)) {
+             activeModel = 'gemini-3-pro-preview';
+        }
 
         if (!isUltra) {
              await sleep(isPaidPool ? 500 : 1000);
@@ -311,9 +324,9 @@ export const analyzeProductDesign = async (
             } as ProductAnalysis;
 
         } catch (error: any) {
-            // Fallback logic for keys
+            // Fallback logic if Pro model fails
             if (activeModel !== 'gemini-2.5-flash') {
-                console.warn(`Pro model failed (${error.status}), falling back to Flash on same key.`);
+                console.warn(`Pro model failed (${error.status || 'Error'}), falling back to Flash on same key.`);
                 const response = await ai.models.generateContent({
                     model: 'gemini-2.5-flash',
                     contents: {
