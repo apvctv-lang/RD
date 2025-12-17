@@ -23,8 +23,25 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   onImageClick
 }) => {
 
+  // FLOOD FILL ALGORITHM: Starts from corners to remove only external background
   const downloadImageAs2500px = (e: React.MouseEvent, dataUrl: string, filename: string, removeWhite: boolean = false) => {
     e.stopPropagation(); 
+    
+    if (!removeWhite) {
+        // Standard Download
+        const link = document.createElement('a');
+        link.href = dataUrl;
+        if (!filename.toLowerCase().endsWith('.png')) {
+           filename = filename.replace(/\.[^/.]+$/, "") + ".png"; 
+        }
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+    }
+
+    // Smart Transparency (Flood Fill)
     const img = new Image();
     img.src = dataUrl;
     img.crossOrigin = "anonymous"; 
@@ -36,33 +53,79 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return;
 
-        // HIGH QUALITY SCALING SETTINGS
+        // High Quality Scaling
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
         
         ctx.clearRect(0, 0, 2500, 2500); 
         ctx.drawImage(img, 0, 0, 2500, 2500);
 
-        if (removeWhite) {
-            const imageData = ctx.getImageData(0, 0, 2500, 2500);
-            const data = imageData.data;
-            // Threshold: 200 to safely remove white/light-gray background
-            const threshold = 200; 
+        const imageData = ctx.getImageData(0, 0, 2500, 2500);
+        const data = imageData.data;
+        const width = 2500;
+        const height = 2500;
+        
+        // Spec: tolerance 10
+        const tolerance = 10; 
+        const visited = new Uint8Array(width * height);
+        
+        // ADAPTIVE: Get background color from top-left pixel
+        const bgR = data[0];
+        const bgG = data[1];
+        const bgB = data[2];
 
-            for (let i = 0; i < data.length; i += 4) {
-                const r = data[i];
-                const g = data[i + 1];
-                const b = data[i + 2];
-                
-                if (r > threshold && g > threshold && b > threshold) {
-                    data[i + 3] = 0; 
-                }
+        // Stack-based recursive fill starting from all 4 corners
+        const stack = [
+            [0, 0], 
+            [width - 1, 0], 
+            [0, height - 1], 
+            [width - 1, height - 1]
+        ];
+
+        while (stack.length > 0) {
+            const pos = stack.pop();
+            if (!pos) continue;
+            const x = pos[0];
+            const y = pos[1];
+            
+            if (x < 0 || x >= width || y < 0 || y >= height) continue;
+            
+            const idx = (y * width + x);
+            if (visited[idx]) continue;
+            visited[idx] = 1;
+
+            const offset = idx * 4;
+            const r = data[offset];
+            const g = data[offset + 1];
+            const b = data[offset + 2];
+            const a = data[offset + 3];
+
+            if (a === 0) {
+                 stack.push([x + 1, y]);
+                 stack.push([x - 1, y]);
+                 stack.push([x, y + 1]);
+                 stack.push([x, y - 1]);
+                 continue;
             }
-            ctx.putImageData(imageData, 0, 0);
+
+            const diffR = Math.abs(r - bgR);
+            const diffG = Math.abs(g - bgG);
+            const diffB = Math.abs(b - bgB);
+
+            if (diffR < tolerance && diffG < tolerance && diffB < tolerance) {
+                // ERASE IT
+                data[offset + 3] = 0; 
+                stack.push([x + 1, y]);
+                stack.push([x - 1, y]);
+                stack.push([x, y + 1]);
+                stack.push([x, y - 1]);
+            }
         }
         
+        ctx.putImageData(imageData, 0, 0);
+        
         const link = document.createElement('a');
-        link.href = canvas.toDataURL('image/png', 1.0); // Quality 1.0
+        link.href = canvas.toDataURL('image/png', 1.0); 
         link.download = filename.replace(/\.(jpg|jpeg)$/i, '.png'); 
         document.body.appendChild(link);
         link.click();
@@ -101,12 +164,11 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                             title="Tải ảnh tách nền (Để in)"
                         >
                             <Download size={14} />
-                            <span className="text-[10px] font-bold">Tải file in (Tách nền)</span>
+                            <span className="text-[10px] font-bold">Tải Thiết Kế (Không Nền)</span>
                         </button>
                     </div>
                   )}
                 </div>
-                {/* Background Checkered pattern to show transparency */}
                 <div className="relative aspect-square bg-[linear-gradient(45deg,#1e293b_25%,transparent_25%,transparent_75%,#1e293b_75%,#1e293b),linear-gradient(45deg,#1e293b_25%,transparent_25%,transparent_75%,#1e293b_75%,#1e293b)] bg-[length:20px_20px] bg-[position:0_0,10px_10px] bg-slate-900 rounded-xl overflow-hidden border border-slate-700 shadow-sm group">
                   {processedImage ? (
                     <img src={processedImage} alt="Processed" className="w-full h-full object-contain p-4" />
@@ -224,10 +286,10 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
          <div className="space-y-4 border-t border-slate-800 pt-8">
             <h3 className="text-xl font-bold text-slate-200 flex items-center">
               {activeTab === AppTab.TSHIRT ? <Shirt className="w-5 h-5 mr-2 text-indigo-500" /> : <Sparkles className="w-5 h-5 mr-2 text-amber-500" />}
-              {activeTab === AppTab.TSHIRT ? 'T-Shirt Design Options' : 'AI Generated Redesigns'}
+              {activeTab === AppTab.TSHIRT ? 'T-Shirt Graphic Options (Raw Design)' : 'AI Generated Redesigns'}
             </h3>
             
-            <div className={`grid grid-cols-1 ${activeTab === AppTab.TSHIRT ? 'md:grid-cols-3' : 'md:grid-cols-3'} gap-6`}>
+            <div className={`grid grid-cols-1 md:grid-cols-3 gap-6`}>
               {stage === ProcessStage.GENERATING ? (
                  Array(activeTab === AppTab.TSHIRT ? 3 : 6).fill(0).map((_, i) => (
                     <div key={i} className="aspect-square bg-slate-900 rounded-xl animate-pulse flex items-center justify-center border border-slate-800">
@@ -235,45 +297,35 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                     </div>
                  ))
               ) : (
-                 generatedRedesigns?.map((img, index) => (
-                    <div 
-                      key={index} 
-                      onClick={() => onImageClick && onImageClick(index)}
-                      className="group relative aspect-square bg-slate-800 rounded-xl overflow-hidden border border-slate-700 shadow-sm hover:shadow-xl hover:border-indigo-500 transition-all cursor-pointer"
-                    >
-                       {activeTab === AppTab.TSHIRT ? (
-                          <div className="w-full h-full relative bg-slate-200">
-                              <div className="absolute inset-0 bg-[url('https://cdn.pixabay.com/photo/2016/11/23/06/57/isolated-t-shirt-1852114_1280.png')] bg-center bg-cover bg-no-repeat opacity-90"></div>
-                              <div className="absolute inset-0 flex items-center justify-center p-16 top-[-20px]">
-                                  <img 
-                                    src={img} 
-                                    alt={`T-Shirt Design ${index + 1}`} 
-                                    className="max-w-full max-h-full object-contain mix-blend-multiply opacity-90" 
-                                  />
-                              </div>
-                          </div>
-                       ) : (
-                          <img src={img} alt={`Redesign ${index + 1}`} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-                       )}
+                 generatedRedesigns?.map((img, index) => {
+                    return (
+                        <div 
+                        key={index} 
+                        onClick={() => onImageClick && onImageClick(index)}
+                        className="group relative aspect-square bg-slate-800 rounded-xl overflow-hidden border border-slate-700 shadow-sm hover:shadow-xl hover:border-indigo-500 transition-all cursor-pointer"
+                        >
+                            {/* Removed bg-black/90 to avoid black box around white designs */}
+                            <img src={img} alt={`Redesign ${index + 1}`} className="w-full h-full object-contain p-2 group-hover:scale-105 transition-transform duration-500" />
 
-                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                          <div className="flex flex-col items-center space-y-3 transform translate-y-2 group-hover:translate-y-0 transition-all">
-                            <span className="bg-slate-900/90 backdrop-blur text-white px-4 py-2 rounded-full font-bold text-sm flex items-center shadow-lg border border-slate-700">
-                              <ZoomIn className="w-4 h-4 mr-2 text-indigo-400" />
-                              View & Remix
-                            </span>
-                            <button 
-                               onClick={(e) => downloadImageAs2500px(e, img, `design-option-2500px-${index + 1}.png`, true)}
-                               className="bg-indigo-600 backdrop-blur text-white px-4 py-2 rounded-full font-medium text-xs flex items-center hover:bg-indigo-700 transition-colors border border-indigo-500 shadow-lg"
-                               title="Download Transparent PNG"
-                            >
-                              <Scissors className="w-3 h-3 mr-2" />
-                              Transparent PNG
-                            </button>
-                          </div>
-                       </div>
-                    </div>
-                 ))
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/60 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                <div className="flex flex-col items-center space-y-3 transform translate-y-2 group-hover:translate-y-0 transition-all">
+                                    <span className="bg-slate-900/90 backdrop-blur text-white px-4 py-2 rounded-full font-bold text-sm flex items-center shadow-lg border border-slate-700">
+                                    <ZoomIn className="w-4 h-4 mr-2 text-indigo-400" />
+                                    {activeTab === AppTab.TSHIRT ? 'Create Mockup' : 'View & Remix'}
+                                    </span>
+                                    <button 
+                                    onClick={(e) => downloadImageAs2500px(e, img, `design-option-2500px-${index + 1}.png`, true)}
+                                    className="bg-indigo-600 backdrop-blur text-white px-4 py-2 rounded-full font-medium text-xs flex items-center hover:bg-indigo-700 transition-colors border border-indigo-500 shadow-lg"
+                                    title="Download Transparent PNG (Auto-Remove White BG)"
+                                    >
+                                    <Scissors className="w-3 h-3 mr-2" />
+                                    Tải Thiết Kế (Không Nền)
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                 })
               )}
             </div>
          </div>

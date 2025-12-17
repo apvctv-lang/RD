@@ -8,17 +8,13 @@ class KeyManager {
   private index = 0;
 
   setKeys(keys: string[]) {
-    // Support parsing newline/comma separated keys from a single string
     const parsedKeys: string[] = [];
     keys.forEach(k => {
         if (!k) return;
-        // Split by newline (\n), carriage return (\r), comma, or semicolon
-        // Filter out empty strings and strings too short to be keys
         const splits = k.split(/[\n\r,;]+/).map(s => s.trim()).filter(s => s.length > 20);
         parsedKeys.push(...splits);
     });
 
-    // Remove duplicates
     this.keys = [...new Set(parsedKeys)];
     this.index = 0;
     console.log(`Key Manager Initialized: ${this.keys.length} Unique Keys`);
@@ -31,13 +27,11 @@ class KeyManager {
   async executeWithRetry<T>(operation: (key: string) => Promise<T>): Promise<T> {
     const envKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
     
-    // If no dynamic keys, use Env Key
     if (!this.hasKeys()) {
        if (!envKey) throw new Error("No API Keys configured.");
        return operation(envKey);
     }
 
-    // Try Keys Loop
     let initialIndex = this.index;
     let lastError: any = null;
 
@@ -51,15 +45,20 @@ class KeyManager {
         } catch (error: any) {
             lastError = error;
             const msg = error?.message || '';
-            const isRateLimit = error?.status === 429 || msg.includes('429') || msg.includes('quota');
-            const isOverloaded = error?.status === 503 || msg.includes('503');
+            const status = error?.status;
+
+            // Rate Limit (429) or Service Unavailable (503) -> Rotate Key
+            const isRateLimit = status === 429 || msg.includes('429') || msg.includes('quota');
+            const isOverloaded = status === 503 || msg.includes('503');
             
             if (isRateLimit || isOverloaded) {
-                console.warn(`Key ending in ...${key.slice(-4)} failed. Rotating...`);
+                console.warn(`Key ending in ...${key.slice(-4)} failed (${status}). Rotating...`);
                 await sleep(1000); 
                 continue; 
             }
-            throw error; // Throw other errors (400, 403) immediately
+            
+            // For 403 (Permission) or 400 (Bad Request), strictly throw so the inner logic can handle fallback
+            throw error; 
         }
     }
 
@@ -92,11 +91,9 @@ export const setKeyPools = (keys: string[]) => {
 
 export const validateToken = async (tokenInput: string): Promise<boolean> => {
   try {
-    // Robust splitting: Handles \n, \r, comma, semicolon
     const keys = tokenInput.split(/[\n\r,;]+/).map(s => s.trim()).filter(s => s.length > 20);
     
     if (keys.length === 0) {
-        // Fallback: Try raw input if it looks like a key but failed regex/length check
         if (tokenInput.trim().length > 10) {
              const ai = getClient(tokenInput.trim());
              await ai.models.generateContent({
@@ -108,7 +105,6 @@ export const validateToken = async (tokenInput: string): Promise<boolean> => {
         throw new Error("Invalid API Key format");
     }
 
-    // Validate only the first key to save time
     const ai = getClient(keys[0]);
     await ai.models.generateContent({
       model: "gemini-2.5-flash",
@@ -124,16 +120,14 @@ export const validateToken = async (tokenInput: string): Promise<boolean> => {
 export const cleanupProductImage = async (imageBase64: string): Promise<string> => {
   return keyManager.executeWithRetry(async (key) => {
       const ai = getClient(key);
-      // Wait slightly to prevent rapid-fire blocks
       await sleep(500);
 
-      // AGGRESSIVE CLEANUP PROMPT
-      const prompt = `Image Editing Task:
-      1. ISOLATE the main product object on a pure solid WHITE background (Hex #FFFFFF).
-      2. REMOVE STRINGS: Completely ERASE and DELETE any hanging strings, jute ropes, ribbons, hooks, holes, or wires attached to the product.
-      3. CRITICAL: Remove the loop/hole at the top of the ornament if it exists. Make the top edge smooth.
-      4. The result should look like the product is floating, with NO attachment mechanism visible.
-      5. Output: Return ONLY the image.`;
+      const prompt = `Task: Background Removal & cleanup.
+      1. Remove only the outer background. Replace it with pure white (#FFFFFF).
+      2. Preserve the entire design including all inner white details, highlights, strokes, and text edges.
+      3. Do not remove any white elements that are part of the artwork.
+      4. Remove any strings, ropes, or hanging loops attached to the object.
+      5. Output as a high-quality image with smooth edges.`;
 
       const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
@@ -168,7 +162,10 @@ export const analyzeProductDesign = async (
 
         let prompt = "";
         if (activeTab === AppTab.TSHIRT) {
-            prompt = `Analyze this T-Shirt Design. Return JSON: { description, designCritique, detectedComponents, redesignPrompt }. For 'redesignPrompt', request a SINGLE UNIFIED GRAPHIC on WHITE background.`;
+            prompt = `Analyze this design. Return JSON: { description, designCritique, detectedComponents, redesignPrompt }. 
+            For 'redesignPrompt': Write a creative T-Shirt design prompt. 
+            Identify the core theme (e.g., Cute, Edgy, Typography, Vintage, Anime).
+            The prompt should aim for a "Trending on Pinterest/Etsy" look. Youthful, Eye-catching, and Modern.`;
         } else {
             prompt = `Analyze this product image. Return JSON: { description, designCritique, detectedComponents, redesignPrompt }. For 'redesignPrompt', request a high-quality product photography mockup.`;
         }
@@ -191,10 +188,8 @@ export const analyzeProductDesign = async (
         if (typeof components === 'string') components = components.split(',');
         if (!Array.isArray(components)) components = [];
 
-        // SAFETY CHECK: Ensure string fields are actually strings
         let safeCritique = rawResult.designCritique;
         if (typeof safeCritique === 'object' && safeCritique !== null) {
-            // Flatten object to string to PREVENT REACT CRASH
             safeCritique = Object.entries(safeCritique)
                 .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${v}`)
                 .join('\n');
@@ -218,7 +213,6 @@ export const analyzeProductDesign = async (
   };
 
 export const extractDesignElements = async (imageBase64: string): Promise<string[]> => {
-  // FUNCTION DISABLED TO SPEED UP APP AS REQUESTED
   return []; 
 };
 
@@ -228,39 +222,89 @@ export const generateProductRedesigns = async (
     selectedComponents: string[],
     userNotes: string,
     productType: string,
-    useUltraFlag: boolean, // Parameter kept for compatibility but ignored
+    useUltraFlag: boolean,
     activeTab: AppTab = AppTab.POD
   ): Promise<string[]> => {
     
     let finalPrompt = basePrompt;
+    let targetModel = 'gemini-3-pro-image-preview';
+    let targetConfig: any = { imageConfig: { imageSize: '2K', aspectRatio: '1:1' } };
+
     if (activeTab === AppTab.TSHIRT) {
-        finalPrompt += `\n\nOUTPUT: ONE SINGLE IMAGE ONLY. Centered graphic on white background. NO grid. NO multiple variations.`;
+        // Enforce gemini-2.5-flash-image for T-Shirt
+        targetModel = 'gemini-2.5-flash-image';
+        // Flash does not support imageSize
+        targetConfig = { imageConfig: { aspectRatio: '1:1' } };
+
+        finalPrompt += `
+**DESIGN TASK:** Create a High-Quality **VECTOR T-SHIRT ILLUSTRATION**.
+
+**ART STYLE (CRITICAL):**
+- **Theme:** Retro/Vintage aesthetic mixed with Modern Streetwear.
+- **Style:** Detailed Vector Art, Mascot Illustration, Sticker Art.
+- **Vibe:** Cool, Groovy, Vibrant, detailed shading but clean lines.
+- **Reference Style:** Think "80s/90s Pop Culture", "Skateboard Deck Art", or "High-end Sticker Design".
+
+**TECHNICAL RULES:**
+1. **Background:** PURE WHITE (#FFFFFF). No background scenery.
+2. **Format:** Isolated Graphic. Ready-to-print.
+3. **Lines:** Strong, confident outlines (thick outer line, thinner inner details).
+4. **Colors:** Rich, saturated, and contrasting colors.
+5. **No 3D Realism:** Do NOT make it look like a photograph. Make it look like a DRAWING/ILLUSTRATION.`;
     } else {
         finalPrompt += `\n\nCreate a photorealistic product mockup. Cinematic lighting. High Resolution. 8K. detailed.`;
     }
+    
     if (userNotes) finalPrompt += `\nUser Note: ${userNotes}`;
 
     const count = activeTab === AppTab.TSHIRT ? 3 : 6;
     
     const results: string[] = [];
     for(let i=0; i<count; i++) {
-        await sleep(500); // Gentle pacing
+        await sleep(500); 
         const img = await keyManager.executeWithRetry(async (key) => {
              const ai = getClient(key);
-             const modelName = 'gemini-3-pro-image-preview'; // Banana Pro / High Quality
              
-             // UPGRADE TO 2K RESOLUTION (High Quality)
-             // gemini-3-pro-image-preview supports '1K', '2K', '4K'
-             const config = { imageConfig: { imageSize: '2K', aspectRatio: '1:1' } };
+             if (activeTab === AppTab.TSHIRT) {
+                 const response = await ai.models.generateContent({
+                    model: targetModel,
+                    contents: { parts: [{ text: finalPrompt }] },
+                    config: targetConfig
+                });
+                for (const part of response.candidates?.[0]?.content?.parts || []) {
+                    if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;
+                }
+             } else {
+                 try {
+                    const response = await ai.models.generateContent({
+                        model: 'gemini-3-pro-image-preview',
+                        contents: { parts: [{ text: finalPrompt }] },
+                        config: { imageConfig: { imageSize: '2K', aspectRatio: '1:1' } }
+                    });
+                    for (const part of response.candidates?.[0]?.content?.parts || []) {
+                        if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;
+                    }
+                 } catch (err: any) {
+                     const isAuthError = err.status === 403 || err.status === 404 || err.message?.includes('PERMISSION_DENIED');
+                     
+                     if (isAuthError) {
+                         console.warn(`Gemini 3 Pro blocked (${err.status}). Falling back to Gemini 2.5 Flash Image.`);
+                         const fallbackModel = 'gemini-2.5-flash-image';
+                         const fallbackConfig = { imageConfig: { aspectRatio: '1:1' } };
 
-             const response = await ai.models.generateContent({
-                model: modelName,
-                contents: { parts: [{ text: finalPrompt }] },
-                config: config
-             });
-             for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;
+                         const response = await ai.models.generateContent({
+                            model: fallbackModel,
+                            contents: { parts: [{ text: finalPrompt }] },
+                            config: fallbackConfig
+                        });
+                        for (const part of response.candidates?.[0]?.content?.parts || []) {
+                            if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;
+                        }
+                     }
+                     throw err; 
+                 }
              }
+             
              return null;
         }).catch((e) => {
             console.warn("Generation failed for one item", e);
@@ -274,23 +318,29 @@ export const generateProductRedesigns = async (
 export const remixProductImage = async (imageBase64: string, instruction: string): Promise<string> => {
     return keyManager.executeWithRetry(async (key) => {
         const ai = getClient(key);
-        const modelName = 'gemini-3-pro-image-preview'; 
-        // Remix also uses 2K
-        const config = { imageConfig: { imageSize: '2K', aspectRatio: '1:1' } };
-        
-        const response = await ai.models.generateContent({
-            model: modelName,
-            contents: {
-                parts: [
-                    { inlineData: { mimeType: "image/jpeg", data: stripBase64Prefix(imageBase64) } },
-                    { text: `Edit image: ${instruction}. High resolution, 8k.` }
-                ]
-            },
-            config: config
-        });
-        for (const part of response.candidates?.[0]?.content?.parts || []) {
-            if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;
+
+        try {
+            const modelName = 'gemini-2.5-flash-image'; 
+            const config = { imageConfig: { aspectRatio: '1:1' } };
+            
+            const response = await ai.models.generateContent({
+                model: modelName,
+                contents: {
+                    parts: [
+                        { inlineData: { mimeType: "image/jpeg", data: stripBase64Prefix(imageBase64) } },
+                        { text: `Edit image: ${instruction}. Maintain the youthful/trendy style. Make it Bold. White Background. Do NOT make a mockup, just raw design.` }
+                    ]
+                },
+                config: config
+            });
+            for (const part of response.candidates?.[0]?.content?.parts || []) {
+                if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;
+            }
+        } catch (err: any) {
+             console.error("Remix failed", err);
+             throw err;
         }
+
         throw new Error("Remix failed");
     });
 };
@@ -301,4 +351,82 @@ export const detectAndSplitCharacters = async (imageBase64: string): Promise<str
 
 export const generateRandomMockup = async (imageBase64: string): Promise<string> => {
     return imageBase64; 
+};
+
+export const generateSmartMockup = async (imageBase64: string): Promise<string> => {
+    return keyManager.executeWithRetry(async (key) => {
+        const ai = getClient(key);
+        const modelName = 'gemini-2.5-flash-image';
+        const config = { imageConfig: { aspectRatio: '1:1' } };
+
+        const prompt = `
+        Act as a professional Fashion Art Director.
+        Input: The provided graphic design.
+        Task: Create a HIGH-END PHOTOREALISTIC T-SHIRT MOCKUP.
+        Auto-pick T-Shirt color (White or Black) based on what makes the design pop.
+        Scene: Fit model, cinematic lighting.
+        `;
+
+        const response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+                parts: [
+                    { inlineData: { mimeType: "image/jpeg", data: stripBase64Prefix(imageBase64) } },
+                    { text: prompt }
+                ]
+            },
+            config: config
+        });
+
+        for (const part of response.candidates?.[0]?.content?.parts || []) {
+            if (part.inlineData && part.inlineData.data) {
+                return `data:image/png;base64,${part.inlineData.data}`;
+            }
+        }
+        throw new Error("Failed to generate smart mockup");
+    });
+};
+
+export const generateSmartMockupBatch = async (imageBase64: string): Promise<string[]> => {
+    // Generate 6 Variations
+    const variations = [
+        "Male model, Black T-Shirt, Street Style",
+        "Female model, White T-Shirt, Casual",
+        "Male model, White T-Shirt, Studio Lighting",
+        "Female model, Black T-Shirt, Urban vibe",
+        "Flat lay, Folded T-Shirt, Minimalist background",
+        "Close-up of chest area, showing fabric texture"
+    ];
+
+    const results: string[] = [];
+
+    // Run parallel or sequential - Sequential safer for rate limits in this context
+    for (const vibe of variations) {
+        await sleep(300); // Slight delay
+        try {
+            const res = await keyManager.executeWithRetry(async (key) => {
+                const ai = getClient(key);
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash-image',
+                    contents: {
+                        parts: [
+                            { inlineData: { mimeType: "image/jpeg", data: stripBase64Prefix(imageBase64) } },
+                            { text: `Create a photorealistic T-Shirt Mockup. ${vibe}. High quality. Design must be clearly visible.` }
+                        ]
+                    },
+                    config: { imageConfig: { aspectRatio: '1:1' } }
+                });
+                for (const part of response.candidates?.[0]?.content?.parts || []) {
+                    if (part.inlineData && part.inlineData.data) {
+                        return `data:image/png;base64,${part.inlineData.data}`;
+                    }
+                }
+                return null;
+            });
+            if (res) results.push(res);
+        } catch (e) {
+            console.warn("Mockup batch item failed", e);
+        }
+    }
+    return results;
 };
