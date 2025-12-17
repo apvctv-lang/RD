@@ -185,8 +185,8 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
 
                   <div className="space-y-2">
                     <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">Design Critique</h4>
-                    <div className="p-3 bg-amber-950/30 border border-amber-900/50 rounded-lg text-sm text-amber-200 leading-relaxed">
-                      {analysis.designCritique}
+                    <div className="p-3 bg-amber-950/30 border border-amber-900/50 rounded-lg text-sm text-amber-200 leading-relaxed whitespace-pre-wrap">
+                      {typeof analysis.designCritique === 'string' ? analysis.designCritique : JSON.stringify(analysis.designCritique)}
                     </div>
                   </div>
                   

@@ -191,7 +191,29 @@ export const analyzeProductDesign = async (
         if (typeof components === 'string') components = components.split(',');
         if (!Array.isArray(components)) components = [];
 
-        return { ...rawResult, detectedComponents: components } as ProductAnalysis;
+        // SAFETY CHECK: Ensure string fields are actually strings
+        let safeCritique = rawResult.designCritique;
+        if (typeof safeCritique === 'object' && safeCritique !== null) {
+            // Flatten object to string to PREVENT REACT CRASH
+            safeCritique = Object.entries(safeCritique)
+                .map(([k, v]) => `${k.charAt(0).toUpperCase() + k.slice(1)}: ${v}`)
+                .join('\n');
+        } else if (typeof safeCritique !== 'string') {
+            safeCritique = "Analysis completed.";
+        }
+
+        let safeDescription = rawResult.description;
+        if (typeof safeDescription !== 'string') safeDescription = "No description generated.";
+
+        let safePrompt = rawResult.redesignPrompt;
+        if (typeof safePrompt !== 'string') safePrompt = "";
+
+        return { 
+            description: safeDescription, 
+            designCritique: safeCritique, 
+            detectedComponents: components,
+            redesignPrompt: safePrompt
+        } as ProductAnalysis;
     });
   };
 

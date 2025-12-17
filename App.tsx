@@ -55,14 +55,21 @@ function App() {
     const storedSystemKey = localStorage.getItem('app_system_key');
     
     if (storedUser) {
+      // CRITICAL: If User is logged in BUT has no System Key (maybe admin just added it to sheet),
+      // we must force them to re-login to fetch it, unless they are the admin.
+      if (!storedSystemKey) {
+          console.warn("Missing System Key. Forcing re-login to fetch from Sheet.");
+          handleLogout();
+          setIsLoadingAuth(false);
+          return;
+      }
+
       setUsername(storedUser);
       setIsAuthenticated(true);
       const perm = storedPerms || 'POD';
       setPermissions(perm);
       
-      if (storedSystemKey) {
-          setKeyPools([storedSystemKey]);
-      }
+      setKeyPools([storedSystemKey]);
       
       // Auto-set tab based on permission
       if (perm === 'TSHIRT') setActiveTab(AppTab.TSHIRT);
@@ -95,6 +102,8 @@ function App() {
     if (systemKey) {
         setKeyPools([systemKey]);
         localStorage.setItem('app_system_key', systemKey);
+    } else {
+        console.warn("Warning: Login successful but no System Key returned from backend.");
     }
 
     if (finalPerms === 'TSHIRT') setActiveTab(AppTab.TSHIRT);
@@ -202,7 +211,7 @@ function App() {
   const handleQuotaError = (err: any) => {
      const errorMessage = err.message || err.toString();
      if (errorMessage.includes("No API Keys configured")) {
-         setError("Chưa có API Key hệ thống. Vui lòng vào mục System Key để nhập.");
+         setError("Hệ thống chưa có API Key. Vui lòng liên hệ Admin.");
          return;
      }
      setError(errorMessage || "Failed to process.");
