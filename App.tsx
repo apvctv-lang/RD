@@ -6,7 +6,7 @@ import { ResultsPanel } from './components/ResultsPanel';
 import { HistorySidebar } from './components/HistorySidebar';
 import { ApiKeyModal } from './components/ApiKeyModal';
 import { RedesignDetailModal } from './components/RedesignDetailModal';
-import { LoginScreen } from './components/LoginScreen'; // Import Login
+import { LoginScreen } from './components/LoginScreen'; 
 import { cleanupProductImage, analyzeProductDesign, generateProductRedesigns, extractDesignElements, remixProductImage, setKeyPools, detectAndSplitCharacters, generateRandomMockup } from './services/geminiService';
 import { sendDataToSheet } from './services/googleSheetService';
 import { ProductAnalysis, ProcessStage, PRODUCT_TYPES, HistoryItem, DesignMode, RopeType, AppTab } from './types';
@@ -16,7 +16,7 @@ function App() {
   // --- AUTHENTICATION STATE ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState<string>('');
-  const [permissions, setPermissions] = useState<string>('ALL'); // 'POD', 'TSHIRT', 'ALL', 'ADMIN'
+  const [permissions, setPermissions] = useState<string>('POD'); 
   const [isLoadingAuth, setIsLoadingAuth] = useState(true);
 
   // --- APP STATE ---
@@ -29,7 +29,7 @@ function App() {
   const [generatedRedesigns, setRedesigns] = useState<string[] | null>(null);
   const [stage, setStage] = useState<ProcessStage>(ProcessStage.IDLE);
   const [error, setError] = useState<string | null>(null);
-  const [productType, setProductType] = useState<string>(PRODUCT_TYPES[0]); // Defaults to Auto-Detect
+  const [productType, setProductType] = useState<string>(PRODUCT_TYPES[0]);
   const [designMode, setDesignMode] = useState<DesignMode>(DesignMode.NEW_CONCEPT);
   
   // Remix / Detail Modal State
@@ -42,16 +42,7 @@ function App() {
   const [redoHistory, setRedoHistory] = useState<Record<number, string[]>>({});
 
   // API Key State
-  const [freeKeysCount, setFreeKeysCount] = useState(0);
-  const [paidKeysCount, setPaidKeysCount] = useState(0);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  
-  // Check for Environment Key (support both standard and custom env var)
-  const envApiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-  const hasEnvKey = envApiKey && envApiKey.length > 10;
-  
-  // Model / Plan State
-  const [useUltra, setUseUltra] = useState(false);
   
   // History State
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -61,39 +52,23 @@ function App() {
   useEffect(() => {
     const storedUser = localStorage.getItem('app_username');
     const storedPerms = localStorage.getItem('app_permissions');
+    const storedSystemKey = localStorage.getItem('app_system_key');
     
     if (storedUser) {
       setUsername(storedUser);
       setIsAuthenticated(true);
-      // Determine permissions (Default to ALL if missing for backward compatibility)
-      const perm = storedPerms || 'ALL';
+      const perm = storedPerms || 'POD';
       setPermissions(perm);
+      
+      if (storedSystemKey) {
+          setKeyPools([storedSystemKey]);
+      }
       
       // Auto-set tab based on permission
       if (perm === 'TSHIRT') setActiveTab(AppTab.TSHIRT);
       else setActiveTab(AppTab.POD);
     }
     setIsLoadingAuth(false);
-  }, []);
-
-  // --- EFFECT: Load Keys ---
-  useEffect(() => {
-    // Load Key Pools from local storage
-    const storedFree = localStorage.getItem('gemini_pool_free');
-    const storedPaid = localStorage.getItem('gemini_pool_paid');
-    
-    const free = storedFree ? JSON.parse(storedFree) : [];
-    const paid = storedPaid ? JSON.parse(storedPaid) : [];
-
-    if (free.length > 0 || paid.length > 0) {
-       setFreeKeysCount(free.length);
-       setPaidKeysCount(paid.length);
-       setKeyPools(free, paid);
-       
-       // Check for Ultra token
-       const hasUltra = paid.some((k: string) => k.startsWith('ya29'));
-       if (hasUltra) setUseUltra(true);
-    }
   }, []);
 
   useEffect(() => {
@@ -108,17 +83,20 @@ function App() {
   }, []);
 
   // --- HANDLERS ---
-  const handleLoginSuccess = (user: string, perms?: string) => {
+  const handleLoginSuccess = (user: string, perms?: string, systemKey?: string) => {
     setUsername(user);
     setIsAuthenticated(true);
     localStorage.setItem('app_username', user);
     
-    // Store permissions
-    const finalPerms = perms || 'ALL';
+    const finalPerms = perms || 'POD';
     setPermissions(finalPerms);
     localStorage.setItem('app_permissions', finalPerms);
 
-    // Initial Tab Set
+    if (systemKey) {
+        setKeyPools([systemKey]);
+        localStorage.setItem('app_system_key', systemKey);
+    }
+
     if (finalPerms === 'TSHIRT') setActiveTab(AppTab.TSHIRT);
     else setActiveTab(AppTab.POD);
   };
@@ -126,26 +104,11 @@ function App() {
   const handleLogout = () => {
     localStorage.removeItem('app_username');
     localStorage.removeItem('app_permissions');
+    localStorage.removeItem('app_system_key');
     setIsAuthenticated(false);
     setUsername('');
-    setPermissions('ALL');
+    setPermissions('POD');
     resetState();
-  };
-
-  const handleSaveKeys = (free: string[], paid: string[]) => {
-    localStorage.setItem('gemini_pool_free', JSON.stringify(free));
-    localStorage.setItem('gemini_pool_paid', JSON.stringify(paid));
-    
-    setFreeKeysCount(free.length);
-    setPaidKeysCount(paid.length);
-    setKeyPools(free, paid);
-    
-    // Update Ultra status
-    const hasUltra = paid.some((k: string) => k.startsWith('ya29'));
-    setUseUltra(hasUltra);
-
-    setIsApiKeyModalOpen(false);
-    setError(null);
   };
 
   const saveHistoryToStorage = (items: HistoryItem[]) => {
@@ -208,35 +171,25 @@ function App() {
     setError(null);
     setIsHistoryOpen(false);
     setExtractedElements(null);
-    setRedesignHistory({}); // Reset undo history for loaded item
-    setRedoHistory({}); // Reset redo history
+    setRedesignHistory({});
+    setRedoHistory({});
   };
 
-  const hasKeys = freeKeysCount > 0 || paidKeysCount > 0;
-
   const processFile = (file: File) => {
-    // Critical Check: If no user keys AND no system key, stop immediately
-    if (!hasKeys && !hasEnvKey) {
-        setError("Không tìm thấy API Key hệ thống. Vui lòng nhập API Key của bạn để bắt đầu.");
-        setIsApiKeyModalOpen(true);
-        return;
-    }
-
     setStage(ProcessStage.UPLOADING);
     setError(null);
     setProcessedImage(null);
     setAnalysis(null);
     setRedesigns(null);
     setExtractedElements(null);
-    setRedesignHistory({}); // Reset undo history
-    setRedoHistory({}); // Reset redo history
+    setRedesignHistory({});
+    setRedoHistory({});
 
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = reader.result as string;
       setOriginalImage(base64);
       
-      // Start processing based on current mode
       if (designMode === DesignMode.CLEAN_ONLY) {
           startQuickClean(base64);
       } else {
@@ -248,30 +201,11 @@ function App() {
 
   const handleQuotaError = (err: any) => {
      const errorMessage = err.message || err.toString();
-     
-     // 1. Missing Keys
      if (errorMessage.includes("No API Keys configured")) {
-         setError("Chưa cấu hình API Key. Vui lòng thêm Key để sử dụng.");
-         setIsApiKeyModalOpen(true);
+         setError("Chưa có API Key hệ thống. Vui lòng vào mục System Key để nhập.");
          return;
      }
-
-     // 2. Suspended/Invalid Key (Permission Denied / 403)
-     // Added 'SUSPENDED' and 'suspended' checks here
-     if (errorMessage.includes("Permission denied") || errorMessage.includes("API key not valid") || errorMessage.includes("403") || errorMessage.includes("SUSPENDED") || errorMessage.includes("suspended")) {
-         setError("API Key đã bị Google tạm ngưng (Suspended) hoặc không hợp lệ. Vui lòng tạo Key mới từ Project khác.");
-         setIsApiKeyModalOpen(true);
-         return;
-     }
-
-     // 3. Quota / Rate Limit
-     const isQuotaError = errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('RESOURSE_EXHAUSTED');
-     if (isQuotaError && !hasKeys) {
-         setError("Dung lượng miễn phí mặc định đã hết hoặc bị giới hạn. Vui lòng thêm API Key riêng.");
-         setIsApiKeyModalOpen(true);
-     } else {
-         setError(errorMessage || "Failed to process.");
-     }
+     setError(errorMessage || "Failed to process.");
   };
 
   const startQuickClean = async (image: string) => {
@@ -293,24 +227,18 @@ function App() {
       
       let cleaned = image;
 
-      // SKIP CLEANUP FOR TSHIRT MODE
+      // Clean ONLY for POD, skip for T-Shirt
       if (activeTab === AppTab.TSHIRT) {
-         console.log("T-Shirt Mode: Skipping cleanup step.");
          setProcessedImage(null); 
       } else {
-         // Standard POD Cleanup
          cleaned = await cleanupProductImage(image);
          setProcessedImage(cleaned);
       }
       
-      // 2. Analyze
       setStage(ProcessStage.ANALYZING);
       const analysisResult = await analyzeProductDesign(image, productType, designMode, activeTab);
       setAnalysis(analysisResult);
 
-      // 3. Extract (Optional and Fail-Safe)
-      // Wrap in try-catch so it doesn't kill the flow if 429 happens
-      // UPDATE: Completely skip extraction for T-Shirt mode to avoid unnecessary quota usage and errors
       if (activeTab !== AppTab.TSHIRT) {
           try {
               const extracted = await extractDesignElements(image);
@@ -320,7 +248,6 @@ function App() {
           }
       }
       
-      // 4. Generate
       if (analysisResult && analysisResult.redesignPrompt) {
          setStage(ProcessStage.GENERATING);
          
@@ -330,15 +257,14 @@ function App() {
             [], 
             "", 
             productType,
-            useUltra,
-            activeTab // Pass the active tab
+            false,
+            activeTab
          );
          
          setRedesigns(redesigns);
          setStage(ProcessStage.COMPLETE);
          
-         // 5. Send to Google Sheet (Hidden Background Process)
-         // PASS USERNAME HERE
+         // Send to Google Sheet
          sendDataToSheet(
             redesigns, 
             analysisResult.redesignPrompt, 
@@ -501,68 +427,47 @@ function App() {
     return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-indigo-500"><RefreshCw className="animate-spin" /></div>;
   }
 
-  // --- SHOW LOGIN SCREEN IF NOT AUTHENTICATED ---
   if (!isAuthenticated) {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
-  // Permission Logic
-  const canAccessPOD = permissions === 'ALL' || permissions === 'POD' || permissions === 'ADMIN';
-  const canAccessTshirt = permissions === 'ALL' || permissions === 'TSHIRT' || permissions === 'ADMIN';
+  // ALLOW "admin" username to be Admin even if permissions not set in sheet yet (CASE INSENSITIVE AND TRIMMED)
+  const isAdmin = permissions === 'ADMIN' || username.trim().toLowerCase() === 'admin';
+  
+  const canAccessPOD = permissions === 'ALL' || permissions === 'POD' || isAdmin;
+  const canAccessTshirt = permissions === 'ALL' || permissions === 'TSHIRT' || isAdmin;
 
-  // --- MAIN APP ---
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col relative overflow-x-hidden text-slate-200">
-      <Header onHistoryClick={() => setIsHistoryOpen(true)} useUltra={useUltra} />
+      <Header onHistoryClick={() => setIsHistoryOpen(true)} useUltra={false} />
 
       {/* User & Key Bar */}
       <div className="bg-slate-900 border-b border-slate-800 py-2 px-4 shadow-sm z-30 relative">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           
-          {/* Left Side: Status & User */}
           <div className="flex items-center space-x-3 text-xs text-slate-400">
              <div className="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
                 <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
                 <span className="text-slate-300 font-bold">{username}</span>
-                {permissions !== 'ALL' && (
+                {(permissions !== 'POD' && permissions !== 'ADMIN') && (
                   <span className="ml-2 px-1.5 py-0.5 bg-slate-700 rounded text-[10px] text-slate-400">{permissions}</span>
                 )}
+                {isAdmin && (
+                  <span className="ml-2 px-1.5 py-0.5 bg-indigo-900/50 text-indigo-300 border border-indigo-700/50 rounded text-[10px] font-bold">ADMIN</span>
+                )}
              </div>
-
-             {hasKeys ? (
-                <div className="flex items-center space-x-2">
-                    <div className="flex items-center bg-indigo-900/30 text-indigo-300 px-3 py-1.5 rounded-full border border-indigo-800">
-                        <Layers className="w-3.5 h-3.5 mr-1.5" />
-                        <span className="mr-1 font-medium">Pool:</span> 
-                        <span>{freeKeysCount} Free, {paidKeysCount} Paid</span>
-                    </div>
-                </div>
-             ) : (
-                <div className={`flex items-center px-3 py-1.5 rounded-full border ${hasEnvKey ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-red-950/30 border-red-900/50 text-red-400'}`}>
-                   {hasEnvKey ? (
-                      <>
-                        <Zap size={14} className="mr-1.5 text-blue-400" />
-                        <span>Using Default</span>
-                      </>
-                   ) : (
-                      <>
-                        <AlertTriangle size={14} className="mr-1.5" />
-                        <span>No Keys</span>
-                      </>
-                   )}
-                </div>
-             )}
           </div>
 
-          {/* Right Side: Controls */}
           <div className="flex items-center space-x-3">
-            <button 
-              onClick={() => setIsApiKeyModalOpen(true)}
-              className="text-xs px-3 py-1.5 bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 rounded-md font-medium transition-colors flex items-center"
-            >
-              <Key size={14} className="mr-1.5" />
-              Manage Keys
-            </button>
+            {isAdmin && (
+                <button 
+                onClick={() => setIsApiKeyModalOpen(true)}
+                className="text-xs px-3 py-1.5 bg-indigo-900/20 text-indigo-300 hover:text-white hover:bg-indigo-600 border border-indigo-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-indigo-900/10"
+                >
+                <Key size={14} className="mr-1.5" />
+                System Key
+                </button>
+            )}
             <button 
               onClick={handleLogout}
               className="text-xs px-3 py-1.5 bg-slate-800 text-red-400 hover:bg-red-900/20 border border-slate-700 hover:border-red-900 rounded-md font-medium transition-colors flex items-center"
@@ -574,12 +479,10 @@ function App() {
         </div>
       </div>
       
-      {/* PROFESSIONAL TAB NAVIGATION */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full z-10 mt-8 mb-4">
         <div className="flex justify-center">
             <div className="bg-slate-900 p-1.5 rounded-xl border border-slate-800 inline-flex shadow-inner">
                
-               {/* POD TAB */}
                {canAccessPOD && (
                   <button 
                     onClick={() => { setActiveTab(AppTab.POD); resetState(); }}
@@ -595,7 +498,6 @@ function App() {
                   </button>
                )}
 
-               {/* T-SHIRT TAB */}
                {canAccessTshirt && (
                   <button 
                     onClick={() => { setActiveTab(AppTab.TSHIRT); resetState(); }}
@@ -610,13 +512,6 @@ function App() {
                      T-Shirt Studio
                   </button>
                )}
-               
-               {/* DISABLED STATE (If user has neither) */}
-               {!canAccessPOD && !canAccessTshirt && (
-                   <div className="px-6 py-2.5 text-slate-500 flex items-center">
-                       <Lock size={14} className="mr-2" /> Access Denied
-                   </div>
-               )}
             </div>
         </div>
       </div>
@@ -630,17 +525,12 @@ function App() {
                      {activeTab === AppTab.POD ? 'POD Product Reimagination' : 'Professional T-Shirt Designer'}
                   </h2>
                   <p className="text-slate-500 max-w-lg mx-auto">
-                     {activeTab === AppTab.POD 
-                       ? 'Upload product photos. AI will automatically remove backgrounds, cleanup wires, and generate stunning new variations.' 
-                       : 'Upload graphics or sketches. AI will convert them into vector-style, print-ready T-shirt designs instantly.'}
+                     Professional AI Design Tool for POD & T-Shirts.
                   </p>
               </div>
 
-              {/* Controls Container (Only for POD Tab) */}
               {activeTab === AppTab.POD && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-lg">
-                     
-                     {/* Design Mode Selector */}
                      <div className="flex flex-col">
                         <label className="text-xs font-bold text-slate-400 uppercase mb-2 flex items-center">
                             <Wand2 className="w-3 h-3 mr-1 text-purple-400" />
@@ -664,7 +554,6 @@ function App() {
                         </div>
                      </div>
     
-                     {/* Product Type Selector */}
                      <div className="flex flex-col">
                         <label className="text-xs font-bold text-slate-400 uppercase mb-2 flex items-center">
                             <Package className="w-3 h-3 mr-1 text-blue-400" />
@@ -685,7 +574,6 @@ function App() {
            </div>
         )}
 
-        {/* Quick Actions (Before Upload) */}
         {stage === ProcessStage.IDLE && (
             <div className="flex justify-center mb-6 animate-fade-in delay-100">
                 <button
@@ -751,9 +639,8 @@ function App() {
       />
 
       <ApiKeyModal
-        isOpen={isApiKeyModalOpen}
-        onClose={() => setIsApiKeyModalOpen(false)}
-        onSave={handleSaveKeys}
+          isOpen={isApiKeyModalOpen}
+          onClose={() => setIsApiKeyModalOpen(false)}
       />
 
       {generatedRedesigns && selectedRedesignIndex !== null && (

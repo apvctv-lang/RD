@@ -60,9 +60,9 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleDownload = (url: string, filename: string) => {
-    // If T-Shirt mode is active, process image to remove white background before downloading
-    if (isTShirtMode) {
+  const handleDownload = (url: string, filename: string, forceTransparent: boolean = false) => {
+    // Force transparency removal logic
+    if (isTShirtMode || forceTransparent) {
         const img = new Image();
         img.src = url;
         img.crossOrigin = "anonymous";
@@ -77,7 +77,8 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
             
             const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const data = imageData.data;
-            const threshold = 220; // Same threshold as ResultsPanel
+            // Lower threshold to 200 for better white removal
+            const threshold = 200; 
             
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i];
@@ -102,7 +103,7 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
         return;
     }
 
-    // Standard download for non-tshirt mode
+    // Standard download
     const link = document.createElement('a');
     link.href = url;
     if (!filename.toLowerCase().endsWith('.png')) {
@@ -201,18 +202,29 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
               <button 
                 onClick={onRemoveBackground}
                 disabled={isRemixing}
-                className="px-4 py-2 bg-indigo-950/30 border border-indigo-900/50 text-indigo-400 rounded-lg text-sm font-medium hover:bg-indigo-900/50 flex items-center transition-colors disabled:opacity-50"
+                className="hidden md:flex px-4 py-2 bg-indigo-950/30 border border-indigo-900/50 text-indigo-400 rounded-lg text-sm font-medium hover:bg-indigo-900/50 items-center transition-colors disabled:opacity-50"
                 title="Isolate product on white background"
               >
                 <Eraser size={16} className="mr-2" />
-                Remove BG
+                Remove BG (AI)
               </button>
+              
+              {/* Separate Download Transparent Button */}
               <button 
-                onClick={() => handleDownload(imageUrl, `design-variation-${Date.now()}.png`)}
+                onClick={() => handleDownload(imageUrl, `transparent-design-${Date.now()}.png`, true)}
+                className="px-4 py-2 bg-teal-900/30 border border-teal-800 text-teal-300 rounded-lg text-sm font-medium hover:bg-teal-900/50 flex items-center shadow-lg shadow-teal-900/10"
+                title="Download PNG with Transparent Background"
+              >
+                <Scissors size={16} className="mr-2" />
+                Transparent
+              </button>
+
+              <button 
+                onClick={() => handleDownload(imageUrl, `design-variation-${Date.now()}.png`, false)}
                 className="px-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-700 flex items-center"
               >
                 <Download size={16} className="mr-2" />
-                Download
+                JPG
               </button>
               <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors">
                 <X size={24} />
@@ -226,13 +238,16 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
             {/* Left: Main Image */}
             <div className="w-full lg:w-2/3 bg-slate-950/50 relative flex items-center justify-center p-8 overflow-hidden">
               <div className="relative w-full h-full flex items-center justify-center">
+                {/* Checkered background for transparency visualization */}
+                 <div className="absolute inset-4 rounded-lg z-0 bg-[linear-gradient(45deg,#1e293b_25%,transparent_25%,transparent_75%,#1e293b_75%,#1e293b),linear-gradient(45deg,#1e293b_25%,transparent_25%,transparent_75%,#1e293b_75%,#1e293b)] bg-[length:20px_20px] bg-[position:0_0,10px_10px] opacity-30"></div>
+                 
                 <img 
                   src={mockupPreview ? mockupPreview.img : imageUrl} 
                   alt="Detail View" 
-                  className="max-w-full max-h-full object-contain shadow-2xl rounded-lg" 
+                  className="max-w-full max-h-full object-contain shadow-2xl rounded-lg z-10 relative" 
                 />
                 {(isRemixing || isGeneratingMockup) && (
-                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center rounded-lg z-10">
+                  <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center rounded-lg z-20">
                     <RefreshCw className="w-12 h-12 text-indigo-500 animate-spin mb-4" />
                     <span className="font-bold text-indigo-300 bg-slate-800 px-4 py-2 rounded-full shadow-lg border border-slate-700">
                       {isGeneratingMockup ? 'Generating Mockup...' : 'Processing Remix...'}
@@ -242,7 +257,7 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
                 
                 {/* Mockup Preview Actions Overlay */}
                 {mockupPreview && !isGeneratingMockup && (
-                    <div className="absolute bottom-8 left-0 right-0 flex justify-center space-x-4">
+                    <div className="absolute bottom-8 left-0 right-0 flex justify-center space-x-4 z-20">
                         <button 
                             onClick={handleReturnFromMockup}
                             className="bg-slate-800 text-slate-200 px-6 py-2 rounded-full shadow-lg font-bold flex items-center hover:bg-slate-700 border border-slate-600"
@@ -426,7 +441,7 @@ export const RedesignDetailModal: React.FC<RedesignDetailModalProps> = ({
                                                         <MonitorPlay size={12} className="mr-1" /> Generate Mockup
                                                     </button>
                                                     <button
-                                                        onClick={() => handleDownload(img, `character-${idx + 1}.png`)}
+                                                        onClick={() => handleDownload(img, `character-${idx + 1}.png`, true)}
                                                         className="w-full py-1.5 bg-slate-700 border border-slate-600 hover:bg-slate-600 text-slate-200 text-xs font-medium rounded flex items-center justify-center"
                                                     >
                                                         <Download size={12} className="mr-1" /> Save PNG

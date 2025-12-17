@@ -1,18 +1,15 @@
 
 // --- CẤU HÌNH ---
-// Bạn có thể đặt ID Sheet cụ thể hoặc để null để lấy Sheet hiện tại (nơi chứa Script này)
-// Nếu dùng ActiveSpreadsheet, hãy đảm bảo bạn dán code này vào Script Editor của Sheet đó.
-var SPECIFIC_SHEET_ID = null; // Ví dụ: "17MqtANWPCsYgF0lUV3I356ejjVgasJhftHI_sAIbroM" hoặc để null
-var FOLDER_NAME = "ProductPerfect_Images"; // Tên thư mục trên Drive
+var SPECIFIC_SHEET_ID = null; 
+var FOLDER_NAME = "ProductPerfect_Images"; 
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
-  lock.tryLock(30000); // Tăng thời gian chờ lên 30s vì upload ảnh lâu
+  lock.tryLock(30000); 
 
   try {
     var doc = SPECIFIC_SHEET_ID ? SpreadsheetApp.openById(SPECIFIC_SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
     
-    // Parse dữ liệu gửi lên
     var requestData = JSON.parse(e.postData.contents);
     var action = requestData.action;
     var result = { status: 'error', message: 'Invalid action' };
@@ -23,6 +20,8 @@ function doPost(e) {
       result = handleLogin(doc, requestData);
     } else if (action === 'log_design') {
       result = handleLogDesign(doc, requestData);
+    } else if (action === 'save_config') {
+      result = handleSaveConfig(doc, requestData);
     }
 
     return ContentService
@@ -44,13 +43,32 @@ function doGet(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// --- XỬ LÝ AUTHENTICATION ---
+// --- CONFIG MANAGEMENT (API KEY) ---
+function handleSaveConfig(doc, data) {
+  var sheet = doc.getSheetByName('Config');
+  if (!sheet) {
+    sheet = doc.insertSheet('Config');
+    sheet.appendRow(['System_API_Key']); // Header
+  }
+  
+  // Clear old key and set new one in cell A2
+  sheet.getRange('A2').setValue(data.apiKey);
+  
+  return { status: 'success', message: 'API Key hệ thống đã được cập nhật!' };
+}
+
+function getSystemApiKey(doc) {
+  var sheet = doc.getSheetByName('Config');
+  if (!sheet) return "";
+  return sheet.getRange('A2').getValue();
+}
+
+// --- AUTHENTICATION ---
 
 function handleRegister(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) {
     sheet = doc.insertSheet('Users');
-    // Added Permissions column
     sheet.appendRow(['Username', 'Password', 'Created At', 'Permissions']);
   }
 
@@ -79,19 +97,24 @@ function handleLogin(doc, data) {
   var password = data.password ? data.password.toString().trim() : "";
 
   var users = sheet.getDataRange().getValues();
-  // Ensure we read enough columns to get permissions (Col 4, index 3)
+  
   for (var i = 1; i < users.length; i++) {
     if (users[i][0] == username && users[i][1] == password) {
-      var perms = "ALL"; // Default
+      var perms = "POD"; // Default to POD, not ALL to be safe
       if (users[i].length > 3 && users[i][3]) {
           perms = users[i][3].toString();
       }
+      
+      // Get the System API Key to return to the user
+      var systemKey = getSystemApiKey(doc);
+
       return { 
         status: 'success', 
         message: 'Đăng nhập thành công!',
         user: { 
           username: username,
-          permissions: perms
+          permissions: perms,
+          systemKey: systemKey // Return the key hiddenly
         }
       };
     }
@@ -106,7 +129,6 @@ function handleLogDesign(doc, data) {
   var sheet = doc.getSheetByName('Designs');
   if (!sheet) {
     sheet = doc.insertSheet('Designs');
-    // Header: Thời gian, User, Prompt, Mô tả, Link Ảnh 1 -> 6
     sheet.appendRow(['Timestamp', 'Username', 'Prompt', 'Description', 'Image 1', 'Image 2', 'Image 3', 'Image 4', 'Image 5', 'Image 6']);
   }
 
@@ -125,35 +147,27 @@ function handleLogDesign(doc, data) {
   var timestamp = new Date();
   var username = data.username || 'Anonymous';
 
-  // Giới hạn tối đa 6 ảnh để tránh timeout (Apps Script chạy tối đa 6 phút, nhưng request web app chờ ít hơn)
   for (var i = 0; i < 6; i++) {
     if (i < images.length && images[i]) {
       try {
-        // Ảnh gửi lên dạng "data:image/png;base64,..."
         var base64Data = images[i].split(",")[1]; 
-        if (!base64Data) base64Data = images[i]; // Phòng trường hợp gửi raw base64
+        if (!base64Data) base64Data = images[i];
 
         var decodedBlob = Utilities.base64Decode(base64Data);
         var fileName = username + "_Option_" + (i+1) + "_" + timestamp.getTime() + ".png";
         
-        // Tạo file
         var file = folder.createFile(Utilities.newBlob(decodedBlob, "image/png", fileName));
-        
-        // Phân quyền: Ai có link cũng xem được (Quan trọng để hiển thị trên web/sheet)
         file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-        
-        // Lấy link download/view
         imageUrls.push(file.getUrl()); 
 
       } catch (err) {
         imageUrls.push("Error: " + err.toString());
       }
     } else {
-      imageUrls.push(""); // Ô trống nếu không có ảnh
+      imageUrls.push(""); 
     }
   }
 
-  // 3. Ghi vào Sheet
   var rowData = [
     timestamp,
     username,

@@ -4,7 +4,7 @@ import { Sparkles, ArrowRight, User, Lock, Loader2, AlertCircle, LogIn, UserPlus
 import { loginUser, registerUser } from '../services/googleSheetService';
 
 interface LoginScreenProps {
-  onLoginSuccess: (username: string, permissions?: string) => void;
+  onLoginSuccess: (username: string, permissions?: string, systemKey?: string) => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
@@ -26,7 +26,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         const res = await registerUser(username, password);
         if (res.status === 'success') {
           setSuccessMsg("Đăng ký thành công! Vui lòng đăng nhập.");
-          setIsRegistering(false); // Switch to login
+          setIsRegistering(false); 
           setPassword('');
         } else {
           setError(res.message);
@@ -34,8 +34,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       } else {
         const res = await loginUser(username, password);
         if (res.status === 'success') {
-          // Pass permissions back to App
-          onLoginSuccess(username, res.user?.permissions);
+          // Pass systemKey from response
+          onLoginSuccess(username, res.user?.permissions, res.user?.systemKey);
         } else {
           setError(res.message);
         }
@@ -49,7 +49,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center relative overflow-hidden bg-[#020617]">
-      {/* Dynamic Background Effects */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/20 rounded-full blur-[120px] animate-pulse"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] animate-pulse delay-700"></div>
       
@@ -145,16 +144,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             </p>
           </div>
         </div>
-        
-        <p className="text-center text-xs text-slate-600 mt-8">
-          &copy; 2024 Team3T AI. All rights reserved.
-        </p>
       </div>
     </div>
   );
 };
 
-// Simple Check Icon for success message
 const Check = ({ className }: { className?: string }) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
     <polyline points="20 6 9 17 4 12" />
