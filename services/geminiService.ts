@@ -218,6 +218,7 @@ export const analyzeProductDesign = async (
   };
 
 export const extractDesignElements = async (imageBase64: string): Promise<string[]> => {
+  // FUNCTION DISABLED TO SPEED UP APP AS REQUESTED
   return []; 
 };
 
@@ -235,7 +236,7 @@ export const generateProductRedesigns = async (
     if (activeTab === AppTab.TSHIRT) {
         finalPrompt += `\n\nOUTPUT: ONE SINGLE IMAGE ONLY. Centered graphic on white background. NO grid. NO multiple variations.`;
     } else {
-        finalPrompt += `\n\nCreate a photorealistic product mockup. Cinematic lighting.`;
+        finalPrompt += `\n\nCreate a photorealistic product mockup. Cinematic lighting. High Resolution. 8K. detailed.`;
     }
     if (userNotes) finalPrompt += `\nUser Note: ${userNotes}`;
 
@@ -246,9 +247,11 @@ export const generateProductRedesigns = async (
         await sleep(500); // Gentle pacing
         const img = await keyManager.executeWithRetry(async (key) => {
              const ai = getClient(key);
-             const modelName = 'gemini-3-pro-image-preview'; // Default to Pro Image
-             // Use 1K for speed and stability, user can upscale if needed
-             const config = { imageConfig: { imageSize: '1K', aspectRatio: '1:1' } };
+             const modelName = 'gemini-3-pro-image-preview'; // Banana Pro / High Quality
+             
+             // UPGRADE TO 2K RESOLUTION (High Quality)
+             // gemini-3-pro-image-preview supports '1K', '2K', '4K'
+             const config = { imageConfig: { imageSize: '2K', aspectRatio: '1:1' } };
 
              const response = await ai.models.generateContent({
                 model: modelName,
@@ -272,14 +275,18 @@ export const remixProductImage = async (imageBase64: string, instruction: string
     return keyManager.executeWithRetry(async (key) => {
         const ai = getClient(key);
         const modelName = 'gemini-3-pro-image-preview'; 
+        // Remix also uses 2K
+        const config = { imageConfig: { imageSize: '2K', aspectRatio: '1:1' } };
+        
         const response = await ai.models.generateContent({
             model: modelName,
             contents: {
                 parts: [
                     { inlineData: { mimeType: "image/jpeg", data: stripBase64Prefix(imageBase64) } },
-                    { text: `Edit image: ${instruction}` }
+                    { text: `Edit image: ${instruction}. High resolution, 8k.` }
                 ]
-            }
+            },
+            config: config
         });
         for (const part of response.candidates?.[0]?.content?.parts || []) {
             if (part.inlineData && part.inlineData.data) return `data:image/png;base64,${part.inlineData.data}`;

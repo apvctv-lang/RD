@@ -25,7 +25,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       if (isRegistering) {
         const res = await registerUser(username, password);
         if (res.status === 'success') {
-          setSuccessMsg("Đăng ký thành công! Vui lòng đăng nhập.");
+          // MODIFIED: Inform user about pending status
+          setSuccessMsg("Đăng ký thành công! Vui lòng chờ Admin duyệt tài khoản trước khi đăng nhập.");
           setIsRegistering(false); 
           setPassword('');
         } else {
@@ -125,7 +126,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
             >
               {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : (
                 <>
-                   {isRegistering ? 'Đăng Ký' : 'Truy Cập Ngay'}
+                   {isRegistering ? 'Gửi Yêu Cầu Đăng Ký' : 'Truy Cập Ngay'}
                    <ArrowRight className="ml-2 w-4 h-4" />
                 </>
               )}

@@ -5,12 +5,13 @@ import { FileUpload } from './components/FileUpload';
 import { ResultsPanel } from './components/ResultsPanel';
 import { HistorySidebar } from './components/HistorySidebar';
 import { ApiKeyModal } from './components/ApiKeyModal';
+import { AdminDashboard } from './components/AdminDashboard'; // Import new dashboard
 import { RedesignDetailModal } from './components/RedesignDetailModal';
 import { LoginScreen } from './components/LoginScreen'; 
 import { cleanupProductImage, analyzeProductDesign, generateProductRedesigns, extractDesignElements, remixProductImage, setKeyPools, detectAndSplitCharacters, generateRandomMockup } from './services/geminiService';
-import { sendDataToSheet } from './services/googleSheetService';
+import { sendDataToSheet, sendHeartbeat, logoutUser } from './services/googleSheetService'; // Added logoutUser
 import { ProductAnalysis, ProcessStage, PRODUCT_TYPES, HistoryItem, DesignMode, RopeType, AppTab } from './types';
-import { AlertCircle, RefreshCw, Key, Layers, Eraser, Sparkles, Zap, Package, Wand2, Paintbrush, AlertTriangle, Shirt, LayoutGrid, LogOut, Lock } from 'lucide-react';
+import { AlertCircle, RefreshCw, Key, Layers, Eraser, Sparkles, Zap, Package, Wand2, Paintbrush, AlertTriangle, Shirt, LayoutGrid, LogOut, Lock, Scissors, Users } from 'lucide-react';
 
 function App() {
   // --- AUTHENTICATION STATE ---
@@ -41,8 +42,9 @@ function App() {
   const [redesignHistory, setRedesignHistory] = useState<Record<number, string[]>>({});
   const [redoHistory, setRedoHistory] = useState<Record<number, string[]>>({});
 
-  // API Key State
+  // Modals State
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false); // New State
   
   // History State
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -89,6 +91,34 @@ function App() {
     }
   }, []);
 
+  // --- HEARTBEAT & LOGOUT EFFECT ---
+  useEffect(() => {
+    let intervalId: any;
+    
+    const handleBeforeUnload = () => {
+        if (isAuthenticated && username) {
+            logoutUser(username); // Send "offline" signal on tab close
+        }
+    };
+
+    if (isAuthenticated && username) {
+        // Send heartbeat immediately on auth
+        sendHeartbeat(username);
+        // Then every 5 minutes
+        intervalId = setInterval(() => {
+            sendHeartbeat(username);
+        }, 300000);
+
+        // Listen for tab close
+        window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+    
+    return () => {
+        if (intervalId) clearInterval(intervalId);
+        window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isAuthenticated, username]);
+
   // --- HANDLERS ---
   const handleLoginSuccess = (user: string, perms?: string, systemKey?: string) => {
     setUsername(user);
@@ -111,6 +141,9 @@ function App() {
   };
 
   const handleLogout = () => {
+    // Notify backend
+    if (username) logoutUser(username);
+
     localStorage.removeItem('app_username');
     localStorage.removeItem('app_permissions');
     localStorage.removeItem('app_system_key');
@@ -194,12 +227,19 @@ function App() {
     setRedesignHistory({});
     setRedoHistory({});
 
+    // Determine Mode based on Tab
+    let currentMode = designMode;
+    if (activeTab === AppTab.TOOLS) {
+        currentMode = DesignMode.CLEAN_ONLY;
+        setDesignMode(DesignMode.CLEAN_ONLY); // Ensure state update
+    }
+
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = reader.result as string;
       setOriginalImage(base64);
       
-      if (designMode === DesignMode.CLEAN_ONLY) {
+      if (currentMode === DesignMode.CLEAN_ONLY) {
           startQuickClean(base64);
       } else {
           startAnalysis(base64);
@@ -446,6 +486,20 @@ function App() {
   const canAccessPOD = permissions === 'ALL' || permissions === 'POD' || isAdmin;
   const canAccessTshirt = permissions === 'ALL' || permissions === 'TSHIRT' || isAdmin;
 
+  // Title Logic
+  let mainTitle = "POD Product Reimagination";
+  let mainDesc = "Professional AI Design Tool for POD & T-Shirts.";
+  let titleGradient = "bg-gradient-to-r from-indigo-400 to-teal-400";
+  
+  if (activeTab === AppTab.TSHIRT) {
+      mainTitle = "Professional T-Shirt Designer";
+      titleGradient = "bg-gradient-to-r from-purple-400 to-pink-400";
+  } else if (activeTab === AppTab.TOOLS) {
+      mainTitle = "Quick AI Tools";
+      mainDesc = "Rapid image processing utilities. No prompt required.";
+      titleGradient = "bg-gradient-to-r from-teal-400 to-emerald-400";
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col relative overflow-x-hidden text-slate-200">
       <Header onHistoryClick={() => setIsHistoryOpen(true)} useUltra={false} />
@@ -468,14 +522,23 @@ function App() {
           </div>
 
           <div className="flex items-center space-x-3">
-            {isAdmin && (
-                <button 
-                onClick={() => setIsApiKeyModalOpen(true)}
-                className="text-xs px-3 py-1.5 bg-indigo-900/20 text-indigo-300 hover:text-white hover:bg-indigo-600 border border-indigo-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-indigo-900/10"
-                >
-                <Key size={14} className="mr-1.5" />
-                System Key
-                </button>
+             {isAdmin && (
+                <>
+                  <button 
+                    onClick={() => setIsAdminDashboardOpen(true)}
+                    className="text-xs px-3 py-1.5 bg-teal-900/20 text-teal-300 hover:text-white hover:bg-teal-600 border border-teal-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-teal-900/10"
+                  >
+                    <Users size={14} className="mr-1.5" />
+                    Manage Users
+                  </button>
+                  <button 
+                    onClick={() => setIsApiKeyModalOpen(true)}
+                    className="text-xs px-3 py-1.5 bg-indigo-900/20 text-indigo-300 hover:text-white hover:bg-indigo-600 border border-indigo-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-indigo-900/10"
+                  >
+                    <Key size={14} className="mr-1.5" />
+                    System Key
+                  </button>
+                </>
             )}
             <button 
               onClick={handleLogout}
@@ -494,9 +557,9 @@ function App() {
                
                {canAccessPOD && (
                   <button 
-                    onClick={() => { setActiveTab(AppTab.POD); resetState(); }}
+                    onClick={() => { setActiveTab(AppTab.POD); setDesignMode(DesignMode.NEW_CONCEPT); resetState(); }}
                     className={`
-                      relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[160px] justify-center
+                      relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center
                       ${activeTab === AppTab.POD 
                         ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/10' 
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}
@@ -509,9 +572,9 @@ function App() {
 
                {canAccessTshirt && (
                   <button 
-                    onClick={() => { setActiveTab(AppTab.TSHIRT); resetState(); }}
+                    onClick={() => { setActiveTab(AppTab.TSHIRT); setDesignMode(DesignMode.NEW_CONCEPT); resetState(); }}
                     className={`
-                      relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[160px] justify-center ml-1
+                      relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ml-1
                       ${activeTab === AppTab.TSHIRT
                         ? 'bg-gradient-to-br from-purple-600 to-purple-700 text-white shadow-lg shadow-purple-500/20 ring-1 ring-white/10' 
                         : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}
@@ -521,6 +584,21 @@ function App() {
                      T-Shirt Studio
                   </button>
                )}
+
+               {/* New Quick Tools Tab - Accessible to ALL users */}
+               <button 
+                  onClick={() => { setActiveTab(AppTab.TOOLS); setDesignMode(DesignMode.CLEAN_ONLY); resetState(); }}
+                  className={`
+                    relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ml-1
+                    ${activeTab === AppTab.TOOLS
+                      ? 'bg-gradient-to-br from-teal-600 to-emerald-600 text-white shadow-lg shadow-teal-500/20 ring-1 ring-white/10' 
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}
+                  `}
+                >
+                    <Eraser size={16} className={`mr-2 ${activeTab === AppTab.TOOLS ? 'text-white' : 'text-slate-500'}`} />
+                    Quick Tools
+                </button>
+
             </div>
         </div>
       </div>
@@ -530,11 +608,11 @@ function App() {
         {stage === ProcessStage.IDLE && (
            <div className="mb-8 space-y-6 animate-fade-in">
               <div className="text-center mb-8">
-                  <h2 className={`text-3xl font-bold bg-clip-text text-transparent mb-2 ${activeTab === AppTab.TSHIRT ? 'bg-gradient-to-r from-purple-400 to-pink-400' : 'bg-gradient-to-r from-indigo-400 to-teal-400'}`}>
-                     {activeTab === AppTab.POD ? 'POD Product Reimagination' : 'Professional T-Shirt Designer'}
+                  <h2 className={`text-3xl font-bold bg-clip-text text-transparent mb-2 ${titleGradient}`}>
+                     {mainTitle}
                   </h2>
                   <p className="text-slate-500 max-w-lg mx-auto">
-                     Professional AI Design Tool for POD & T-Shirts.
+                     {mainDesc}
                   </p>
               </div>
 
@@ -580,19 +658,20 @@ function App() {
                      </div>
                   </div>
               )}
-           </div>
-        )}
 
-        {stage === ProcessStage.IDLE && (
-            <div className="flex justify-center mb-6 animate-fade-in delay-100">
-                <button
-                   onClick={() => setDesignMode(DesignMode.CLEAN_ONLY)}
-                   className={`flex items-center px-4 py-2 rounded-full text-xs font-bold transition-all border ${designMode === DesignMode.CLEAN_ONLY ? 'bg-teal-900/30 text-teal-300 border-teal-500/50' : 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-600'}`}
-                >
-                   <Eraser size={14} className="mr-1.5" />
-                   Quick Tool: Remove Background & Ropes Only
-                </button>
-            </div>
+              {/* Tools Tab Specific Header */}
+              {activeTab === AppTab.TOOLS && (
+                  <div className="max-w-xl mx-auto bg-slate-900/50 p-6 rounded-xl border border-teal-900/30 flex flex-col items-center text-center">
+                      <div className="p-3 bg-teal-900/20 rounded-full mb-3 text-teal-400">
+                          <Scissors size={24} />
+                      </div>
+                      <h3 className="text-lg font-bold text-teal-100 mb-2">Remove Background & Ropes</h3>
+                      <p className="text-sm text-slate-400 mb-0">
+                          Upload any product image. The AI will automatically isolate the object, remove the background, and erase hanging strings/ropes.
+                      </p>
+                  </div>
+              )}
+           </div>
         )}
 
         {stage === ProcessStage.IDLE ? (
@@ -631,7 +710,7 @@ function App() {
                     className="flex items-center px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-full font-bold shadow-lg transition-all border border-slate-700 hover:border-indigo-500"
                   >
                     <RefreshCw className="w-4 h-4 mr-2" />
-                    Start New Design
+                    Start New Process
                   </button>
                </div>
             )}
@@ -650,6 +729,12 @@ function App() {
       <ApiKeyModal
           isOpen={isApiKeyModalOpen}
           onClose={() => setIsApiKeyModalOpen(false)}
+      />
+
+      <AdminDashboard
+          isOpen={isAdminDashboardOpen}
+          onClose={() => setIsAdminDashboardOpen(false)}
+          currentUser={username}
       />
 
       {generatedRedesigns && selectedRedesignIndex !== null && (

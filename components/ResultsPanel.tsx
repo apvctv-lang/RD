@@ -36,16 +36,17 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) return;
 
+        // HIGH QUALITY SCALING SETTINGS
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
-        ctx.clearRect(0, 0, 2500, 2500); // Ensure clean canvas
         
+        ctx.clearRect(0, 0, 2500, 2500); 
         ctx.drawImage(img, 0, 0, 2500, 2500);
 
         if (removeWhite) {
             const imageData = ctx.getImageData(0, 0, 2500, 2500);
             const data = imageData.data;
-            // Threshold: 200 (aggressive) to remove light gray artifacts/shadows
+            // Threshold: 200 to safely remove white/light-gray background
             const threshold = 200; 
 
             for (let i = 0; i < data.length; i += 4) {
@@ -53,7 +54,6 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
                 const g = data[i + 1];
                 const b = data[i + 2];
                 
-                // If it is white/near-white, make it fully transparent (Alpha = 0)
                 if (r > threshold && g > threshold && b > threshold) {
                     data[i + 3] = 0; 
                 }
@@ -62,7 +62,7 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
         }
         
         const link = document.createElement('a');
-        link.href = canvas.toDataURL('image/png');
+        link.href = canvas.toDataURL('image/png', 1.0); // Quality 1.0
         link.download = filename.replace(/\.(jpg|jpeg)$/i, '.png'); 
         document.body.appendChild(link);
         link.click();

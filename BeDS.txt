@@ -18,10 +18,18 @@ function doPost(e) {
       result = handleRegister(doc, requestData);
     } else if (action === 'login') {
       result = handleLogin(doc, requestData);
+    } else if (action === 'logout') {
+      result = handleLogout(doc, requestData);
+    } else if (action === 'heartbeat') {
+      result = handleHeartbeat(doc, requestData);
     } else if (action === 'log_design') {
       result = handleLogDesign(doc, requestData);
     } else if (action === 'save_config') {
       result = handleSaveConfig(doc, requestData);
+    } else if (action === 'get_users') {
+      result = handleGetUsers(doc, requestData);
+    } else if (action === 'update_permission') {
+      result = handleUpdatePermission(doc, requestData);
     }
 
     return ContentService
@@ -63,17 +71,95 @@ function getSystemApiKey(doc) {
   return sheet.getRange('A2').getValue();
 }
 
-// --- AUTHENTICATION ---
+// --- LOGGING HELPER ---
+function logAccess(doc, username, action, ip) {
+  try {
+    var sheet = doc.getSheetByName('AccessLogs');
+    if (!sheet) {
+      sheet = doc.insertSheet('AccessLogs');
+      sheet.appendRow(['Time', 'User', 'Action', 'IP Address']);
+    }
+    sheet.appendRow([new Date(), username, action, ip || 'Unknown']);
+  } catch (e) {
+    // Ignore logging errors
+  }
+}
+
+// --- USER MANAGEMENT ---
+
+function ensureUserSheetHeaders(sheet) {
+  // Ensure headers exist: Username, Password, Created At, Permissions, Last IP, Last Login, Last Active, Current Status
+  var headers = sheet.getRange(1, 1, 1, 8).getValues()[0];
+  if (headers[0] !== 'Username') {
+    sheet.appendRow(['Username', 'Password', 'Created At', 'Permissions', 'Last IP', 'Last Login', 'Last Active', 'Current Status']);
+  } else if (headers.length < 8 || headers[7] !== 'Current Status') {
+     // If upgrading from old version, set header for col 8
+     sheet.getRange(1, 8).setValue('Current Status');
+  }
+}
+
+function handleGetUsers(doc, data) {
+  var sheet = doc.getSheetByName('Users');
+  if (!sheet) return { status: 'error', message: 'Chưa có dữ liệu người dùng.' };
+  
+  var users = sheet.getDataRange().getValues();
+  // Remove header
+  var userList = [];
+  for (var i = 1; i < users.length; i++) {
+    userList.push({
+      username: users[i][0],
+      createdAt: users[i][2],
+      permissions: users[i][3] || 'PENDING',
+      lastIp: users[i][4] || '',
+      lastLogin: users[i][5] || '',
+      lastActive: users[i][6] || '',
+      currentStatus: users[i][7] || 'Offline' // Get Status
+    });
+  }
+  
+  return { status: 'success', users: userList };
+}
+
+function handleUpdatePermission(doc, data) {
+  var sheet = doc.getSheetByName('Users');
+  if (!sheet) return { status: 'error', message: 'Lỗi dữ liệu.' };
+
+  var targetUser = data.targetUser;
+  var newPermission = data.newPermission;
+  
+  var users = sheet.getDataRange().getValues();
+  var found = false;
+  
+  for (var i = 1; i < users.length; i++) {
+    if (users[i][0] == targetUser) {
+      // Column D (index 3) is permissions (Row is i+1)
+      sheet.getRange(i + 1, 4).setValue(newPermission);
+      found = true;
+      break;
+    }
+  }
+  
+  if (found) {
+    return { status: 'success', message: 'Cập nhật quyền thành công!' };
+  } else {
+    return { status: 'error', message: 'Không tìm thấy user.' };
+  }
+}
+
+// --- AUTHENTICATION & TRACKING ---
 
 function handleRegister(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) {
     sheet = doc.insertSheet('Users');
-    sheet.appendRow(['Username', 'Password', 'Created At', 'Permissions']);
+    ensureUserSheetHeaders(sheet);
+  } else {
+    ensureUserSheetHeaders(sheet);
   }
 
   var username = data.username ? data.username.toString().trim() : "";
   var password = data.password ? data.password.toString().trim() : "";
+  var userIp = data.ip || "Unknown";
 
   if (!username || !password) return { status: 'error', message: 'Thiếu thông tin đăng ký' };
 
@@ -84,28 +170,47 @@ function handleRegister(doc, data) {
     }
   }
 
-  // Default Permission: POD
-  sheet.appendRow([username, password, new Date(), 'POD']);
-  return { status: 'success', message: 'Đăng ký thành công!' };
+  // Permissions defaults to PENDING
+  sheet.appendRow([username, password, new Date(), 'PENDING', '', '', '', 'Offline']);
+  
+  // Log Access
+  logAccess(doc, username, 'Register', userIp);
+
+  return { status: 'success', message: 'Đăng ký thành công! Vui lòng chờ Admin duyệt.' };
 }
 
 function handleLogin(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) return { status: 'error', message: 'Chưa có dữ liệu người dùng.' };
 
+  ensureUserSheetHeaders(sheet); // Make sure Col 8 exists
+
   var username = data.username ? data.username.toString().trim() : "";
   var password = data.password ? data.password.toString().trim() : "";
+  var userIp = data.ip || "Unknown";
+  var timestamp = new Date();
 
   var users = sheet.getDataRange().getValues();
   
   for (var i = 1; i < users.length; i++) {
     if (users[i][0] == username && users[i][1] == password) {
-      var perms = "POD"; // Default to POD, not ALL to be safe
+      var perms = "PENDING"; 
       if (users[i].length > 3 && users[i][3]) {
           perms = users[i][3].toString();
       }
       
-      // Get the System API Key to return to the user
+      if (perms === 'PENDING') return { status: 'error', message: 'Tài khoản đang chờ duyệt.' };
+      if (perms === 'BLOCK') return { status: 'error', message: 'Tài khoản đã bị khóa.' };
+      
+      // Update IP (Col 5), Last Login (Col 6), Last Active (Col 7), Status (Col 8)
+      sheet.getRange(i + 1, 5).setValue(userIp);
+      sheet.getRange(i + 1, 6).setValue(timestamp);
+      sheet.getRange(i + 1, 7).setValue(timestamp);
+      sheet.getRange(i + 1, 8).setValue('Online');
+      
+      // Log Access
+      logAccess(doc, username, 'Login', userIp);
+
       var systemKey = getSystemApiKey(doc);
 
       return { 
@@ -114,13 +219,57 @@ function handleLogin(doc, data) {
         user: { 
           username: username,
           permissions: perms,
-          systemKey: systemKey // Return the key hiddenly
+          systemKey: systemKey
         }
       };
     }
   }
 
   return { status: 'error', message: 'Sai tên đăng nhập hoặc mật khẩu.' };
+}
+
+function handleLogout(doc, data) {
+  var sheet = doc.getSheetByName('Users');
+  if (!sheet) return { status: 'error' };
+
+  var username = data.username;
+  var ip = data.ip || 'Unknown';
+
+  var users = sheet.getDataRange().getValues();
+  
+  for (var i = 1; i < users.length; i++) {
+    if (users[i][0] == username) {
+      // Set Status (Col 8) to 'Offline'
+      sheet.getRange(i + 1, 8).setValue('Offline');
+      
+      // Log Access
+      logAccess(doc, username, 'Logout', ip);
+      
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: 'User not found' };
+}
+
+function handleHeartbeat(doc, data) {
+  var sheet = doc.getSheetByName('Users');
+  if (!sheet) return { status: 'error' };
+
+  var username = data.username;
+  var userIp = data.ip; 
+  var timestamp = new Date();
+  
+  var users = sheet.getDataRange().getValues();
+  for (var i = 1; i < users.length; i++) {
+    if (users[i][0] == username) {
+      // Update Last Active (Col 7) and Status (Col 8)
+      sheet.getRange(i + 1, 7).setValue(timestamp);
+      sheet.getRange(i + 1, 8).setValue('Online'); 
+      if (userIp) sheet.getRange(i + 1, 5).setValue(userIp);
+      return { status: 'success' };
+    }
+  }
+  return { status: 'error', message: 'User not found' };
 }
 
 // --- XỬ LÝ LƯU DESIGN & UPLOAD ẢNH ---

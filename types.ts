@@ -14,7 +14,8 @@ export enum DesignMode {
 
 export enum AppTab {
   POD = 'POD',
-  TSHIRT = 'TSHIRT'
+  TSHIRT = 'TSHIRT',
+  TOOLS = 'TOOLS'
 }
 
 export enum RopeType {
