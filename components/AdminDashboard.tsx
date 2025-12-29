@@ -3,13 +3,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { X, Users, RefreshCw, CheckCircle2, AlertCircle, Shield, MoreHorizontal, Search, Globe, Clock, Circle, Store, Upload, Plus, Image as ImageIcon, LayoutGrid, HardDrive, MousePointer2, Trash2, Loader2, Settings } from 'lucide-react';
 import { getUsers, updateUserPermission, saveMockupToSheet, getMockupsFromSheet } from '../services/googleSheetService';
 
-interface AdminDashboardProps {
-  isOpen: boolean;
-  onClose: () => void;
-  currentUser: string;
-  currentPermissions: string;
-}
-
 interface UserData {
   username: string;
   createdAt: string;
@@ -30,6 +23,13 @@ const PERMISSION_OPTIONS = [
   { value: 'ADMIN', label: 'Admin', color: 'bg-red-900/30 text-red-400 border-red-900' },
   { value: 'BLOCK', label: 'Blocked', color: 'bg-slate-700 text-slate-400 border-slate-600' },
 ];
+
+interface AdminDashboardProps {
+  isOpen: boolean;
+  onClose: () => void;
+  currentUser: string;
+  currentPermissions: string;
+}
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose, currentUser, currentPermissions }) => {
   const isAdmin = currentPermissions === 'ADMIN' || currentUser.trim().toLowerCase() === 'admin';
@@ -93,7 +93,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose,
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+      // Fix: Added explicit type cast to File[] to resolve 'type' property access error on unknown elements.
+      const files = (Array.from(e.target.files) as File[]).filter(f => f.type.startsWith('image/'));
       setPendingFiles(prev => [...prev, ...files]);
     }
   };
@@ -163,7 +164,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ isOpen, onClose,
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files) {
-      const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+      // Fix: Added explicit type cast to File[] to resolve 'type' property access error on unknown elements.
+      const files = (Array.from(e.dataTransfer.files) as File[]).filter(f => f.type.startsWith('image/'));
       setPendingFiles(prev => [...prev, ...files]);
     }
   };
