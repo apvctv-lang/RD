@@ -60,10 +60,13 @@ const callScript = async (payload: any, useKeepAlive = false): Promise<ApiRespon
   }
 };
 
+/**
+ * Lấy Base64 của ảnh thông qua Backend để tránh lỗi CORS.
+ */
 export const getImageBase64 = async (url: string): Promise<string> => {
   const res = await callScript({ action: 'get_image_base64', url });
   if (res.status === 'success' && res.base64) return res.base64;
-  throw new Error(res.message || "Failed to fetch image base64");
+  throw new Error(res.message || "Failed to fetch image base64 via proxy");
 };
 
 export const registerUser = async (username: string, password: string): Promise<ApiResponse> => {

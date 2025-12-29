@@ -10,21 +10,37 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
+/**
+ * Standard Error Boundary component to catch UI crashes.
+ * Explicitly typed to ensure inheritance from Component is correctly recognized by the TypeScript compiler.
+ */
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  // Explicitly declare state as a property to resolve "Property 'state' does not exist on type 'ErrorBoundary'" error.
   public state: ErrorBoundaryState = {
     hasError: false,
     error: null
   };
 
+  // Explicitly declare props as a property to resolve "Property 'props' does not exist on type 'ErrorBoundary'" error.
+  // Note: This helps satisfying the TypeScript compiler in environments where members of Component are not automatically resolved.
+  public props!: ErrorBoundaryProps;
+
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+  }
+
+  // Handle errors during rendering
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return { hasError: true, error };
   }
 
+  // Log errors for debugging
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('Uncaught error:', error, errorInfo);
   }
 
   render() {
+    // Accessing state which is inherited from React.Component
     if (this.state.hasError) {
       return (
         <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
@@ -37,6 +53,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               The application encountered an unexpected error. Please try reloading.
             </p>
             
+            {/* Displaying caught error details if available */}
             {this.state.error && (
                 <div className="bg-slate-950 p-3 rounded text-xs font-mono text-red-400 mb-6 text-left overflow-auto max-h-32 border border-slate-800">
                     {this.state.error.toString()}
@@ -55,6 +72,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       );
     }
 
+    // Accessing props.children which is inherited from Component
     return this.props.children;
   }
 }

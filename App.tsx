@@ -1,17 +1,16 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
 import { ResultsPanel } from './components/ResultsPanel';
 import { HistorySidebar } from './components/HistorySidebar';
-import { ApiKeyModal } from './components/ApiKeyModal';
-import { AdminDashboard } from './components/AdminDashboard'; // Import new dashboard
+import { AdminDashboard } from './components/AdminDashboard'; 
 import { RedesignDetailModal } from './components/RedesignDetailModal';
 import { LoginScreen } from './components/LoginScreen'; 
-import { cleanupProductImage, analyzeProductDesign, generateProductRedesigns, extractDesignElements, remixProductImage, setKeyPools, detectAndSplitCharacters, generateRandomMockup } from './services/geminiService';
-import { sendDataToSheet, sendHeartbeat, logoutUser } from './services/googleSheetService'; // Added logoutUser
+import { cleanupProductImage, analyzeProductDesign, generateProductRedesigns, remixProductImage, detectAndSplitCharacters, generateRandomMockup } from './services/geminiService';
+import { sendDataToSheet, sendHeartbeat, logoutUser, getDesignsFromSheet } from './services/googleSheetService'; 
 import { ProductAnalysis, ProcessStage, PRODUCT_TYPES, HistoryItem, DesignMode, RopeType, AppTab } from './types';
-import { AlertCircle, RefreshCw, Key, Layers, Eraser, Sparkles, Zap, Package, Wand2, Paintbrush, AlertTriangle, Shirt, LayoutGrid, LogOut, Lock, Scissors, Users } from 'lucide-react';
+import { AlertCircle, RefreshCw, Eraser, Sparkles, Package, Wand2, Paintbrush, Shirt, LayoutGrid, LogOut, Users, Settings } from 'lucide-react';
 
 function App() {
   // --- AUTHENTICATION STATE ---
@@ -25,7 +24,6 @@ function App() {
   
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [processedImage, setProcessedImage] = useState<string | null>(null);
-  const [extractedElements, setExtractedElements] = useState<string[] | null>(null);
   const [analysis, setAnalysis] = useState<ProductAnalysis | null>(null);
   const [generatedRedesigns, setRedesigns] = useState<string[] | null>(null);
   const [stage, setStage] = useState<ProcessStage>(ProcessStage.IDLE);
@@ -43,53 +41,66 @@ function App() {
   const [redoHistory, setRedoHistory] = useState<Record<number, string[]>>({});
 
   // Modals State
-  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false); // New State
+  const [isAdminDashboardOpen, setIsAdminDashboardOpen] = useState(false); 
   
   // History State
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Heartbeat Error Tracking
+  const heartbeatFails = useRef(0);
 
   // --- EFFECT: Check Auth Session ---
   useEffect(() => {
     const storedUser = localStorage.getItem('app_username');
     const storedPerms = localStorage.getItem('app_permissions');
-    const storedSystemKey = localStorage.getItem('app_system_key');
     
     if (storedUser) {
-      // CRITICAL: If User is logged in BUT has no System Key (maybe admin just added it to sheet),
-      // we must force them to re-login to fetch it, unless they are the admin.
-      if (!storedSystemKey) {
-          console.warn("Missing System Key. Forcing re-login to fetch from Sheet.");
-          handleLogout();
-          setIsLoadingAuth(false);
-          return;
-      }
-
       setUsername(storedUser);
       setIsAuthenticated(true);
       const perm = storedPerms || 'POD';
       setPermissions(perm);
       
-      setKeyPools([storedSystemKey]);
-      
-      // Auto-set tab based on permission
       if (perm === 'TSHIRT') setActiveTab(AppTab.TSHIRT);
       else setActiveTab(AppTab.POD);
     }
     setIsLoadingAuth(false);
   }, []);
 
-  useEffect(() => {
+  const fetchCloudHistory = useCallback(async () => {
+    if (!username) return;
+    setIsLoadingHistory(true);
     try {
-      const savedHistory = localStorage.getItem('product_perfect_history');
-      if (savedHistory) {
-        setHistory(JSON.parse(savedHistory));
+      const isAdmin = permissions === 'ADMIN' || username.trim().toLowerCase() === 'admin';
+      const res = await getDesignsFromSheet(username, isAdmin);
+      if (res.status === 'success' && res.data) {
+        const cloudItems: HistoryItem[] = res.data.map((d: any) => ({
+          id: d.id,
+          timestamp: new Date(d.timestamp).getTime(),
+          originalImage: d.images[0] || '',
+          processedImage: d.images[0] || null,
+          analysis: { description: d.description, redesignPrompt: d.prompt, designCritique: '', detectedComponents: [] },
+          generatedRedesigns: d.images,
+          productType: d.productType,
+          designMode: DesignMode.NEW_CONCEPT,
+          tab: AppTab.POD,
+          username: d.username
+        }));
+        setHistory(cloudItems);
       }
     } catch (e) {
-      console.error("Failed to load history", e);
+      console.error("Failed to load history from cloud", e);
+    } finally {
+      setIsLoadingHistory(false);
     }
-  }, []);
+  }, [username, permissions]);
+
+  useEffect(() => {
+    if (isHistoryOpen) {
+      fetchCloudHistory();
+    }
+  }, [isHistoryOpen, fetchCloudHistory]);
 
   // --- HEARTBEAT & LOGOUT EFFECT ---
   useEffect(() => {
@@ -97,19 +108,28 @@ function App() {
     
     const handleBeforeUnload = () => {
         if (isAuthenticated && username) {
-            logoutUser(username); // Send "offline" signal on tab close
+            logoutUser(username); 
+        }
+    };
+
+    const runHeartbeat = async () => {
+        if (!isAuthenticated || !username || heartbeatFails.current >= 3) return;
+        try {
+            await sendHeartbeat(username);
+            heartbeatFails.current = 0; // Reset counter on success
+        } catch (err) {
+            heartbeatFails.current++;
+            console.warn(`Heartbeat attempt ${heartbeatFails.current} failed.`);
+            if (heartbeatFails.current >= 3) {
+                console.error("Heartbeat stopped due to multiple failures.");
+            }
         }
     };
 
     if (isAuthenticated && username) {
-        // Send heartbeat immediately on auth
-        sendHeartbeat(username);
-        // Then every 5 minutes
-        intervalId = setInterval(() => {
-            sendHeartbeat(username);
-        }, 300000);
+        runHeartbeat();
+        intervalId = setInterval(runHeartbeat, 300000); // 5 mins
 
-        // Listen for tab close
         window.addEventListener('beforeunload', handleBeforeUnload);
     }
     
@@ -120,7 +140,7 @@ function App() {
   }, [isAuthenticated, username]);
 
   // --- HANDLERS ---
-  const handleLoginSuccess = (user: string, perms?: string, systemKey?: string) => {
+  const handleLoginSuccess = (user: string, perms?: string) => {
     setUsername(user);
     setIsAuthenticated(true);
     localStorage.setItem('app_username', user);
@@ -128,42 +148,20 @@ function App() {
     const finalPerms = perms || 'POD';
     setPermissions(finalPerms);
     localStorage.setItem('app_permissions', finalPerms);
-
-    if (systemKey) {
-        setKeyPools([systemKey]);
-        localStorage.setItem('app_system_key', systemKey);
-    } else {
-        console.warn("Warning: Login successful but no System Key returned from backend.");
-    }
+    heartbeatFails.current = 0; // Reset counter on login
 
     if (finalPerms === 'TSHIRT') setActiveTab(AppTab.TSHIRT);
     else setActiveTab(AppTab.POD);
   };
 
   const handleLogout = () => {
-    // Notify backend
     if (username) logoutUser(username);
-
     localStorage.removeItem('app_username');
     localStorage.removeItem('app_permissions');
-    localStorage.removeItem('app_system_key');
     setIsAuthenticated(false);
     setUsername('');
     setPermissions('POD');
     resetState();
-  };
-
-  const saveHistoryToStorage = (items: HistoryItem[]) => {
-    try {
-      localStorage.setItem('product_perfect_history', JSON.stringify(items));
-    } catch (e) {
-      console.warn("LocalStorage quota exceeded.");
-      if (items.length > 1) {
-        const reducedItems = items.slice(0, -1);
-        saveHistoryToStorage(reducedItems);
-        setHistory(reducedItems);
-      }
-    }
   };
 
   const addToHistory = (
@@ -176,29 +174,12 @@ function App() {
     rType: RopeType,
     tab: AppTab
   ) => {
-    const newItem: HistoryItem = {
-      id: Date.now().toString(),
-      timestamp: Date.now(),
-      originalImage: orig,
-      processedImage: proc,
-      analysis: anal,
-      generatedRedesigns: redesigns,
-      productType: pType,
-      designMode: dMode,
-      ropeType: rType,
-      tab: tab
-    };
-
-    const newHistory = [newItem, ...history];
-    setHistory(newHistory);
-    saveHistoryToStorage(newHistory);
+    // Cloud sync happens via sendDataToSheet already called in startAnalysis
   };
 
   const handleDeleteHistory = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const newHistory = history.filter(item => item.id !== id);
-    setHistory(newHistory);
-    saveHistoryToStorage(newHistory);
+    setHistory(history.filter(item => item.id !== id));
   };
 
   const handleLoadHistory = (item: HistoryItem) => {
@@ -212,7 +193,6 @@ function App() {
     setStage(ProcessStage.COMPLETE);
     setError(null);
     setIsHistoryOpen(false);
-    setExtractedElements(null);
     setRedesignHistory({});
     setRedoHistory({});
   };
@@ -223,15 +203,13 @@ function App() {
     setProcessedImage(null);
     setAnalysis(null);
     setRedesigns(null);
-    setExtractedElements(null);
     setRedesignHistory({});
     setRedoHistory({});
 
-    // Determine Mode based on Tab
     let currentMode = designMode;
     if (activeTab === AppTab.TOOLS) {
         currentMode = DesignMode.CLEAN_ONLY;
-        setDesignMode(DesignMode.CLEAN_ONLY); // Ensure state update
+        setDesignMode(DesignMode.CLEAN_ONLY);
     }
 
     const reader = new FileReader();
@@ -250,11 +228,7 @@ function App() {
 
   const handleQuotaError = (err: any) => {
      const errorMessage = err.message || err.toString();
-     if (errorMessage.includes("No API Keys configured")) {
-         setError("Hệ thống chưa có API Key. Vui lòng liên hệ Admin.");
-         return;
-     }
-     setError(errorMessage || "Failed to process.");
+     setError(errorMessage || "Service currently unavailable.");
   };
 
   const startQuickClean = async (image: string) => {
@@ -273,10 +247,8 @@ function App() {
   const startAnalysis = async (image: string) => {
     try {
       setStage(ProcessStage.CLEANING); 
-      
       let cleaned = image;
 
-      // Clean ONLY for POD, skip for T-Shirt
       if (activeTab === AppTab.TSHIRT) {
          setProcessedImage(null); 
       } else {
@@ -287,15 +259,6 @@ function App() {
       setStage(ProcessStage.ANALYZING);
       const analysisResult = await analyzeProductDesign(image, productType, designMode, activeTab);
       setAnalysis(analysisResult);
-
-      if (activeTab !== AppTab.TSHIRT) {
-          try {
-              const extracted = await extractDesignElements(image);
-              setExtractedElements(extracted);
-          } catch (extractError) {
-              console.warn("Extraction failed silently:", extractError);
-          }
-      }
       
       if (analysisResult && analysisResult.redesignPrompt) {
          setStage(ProcessStage.GENERATING);
@@ -307,30 +270,15 @@ function App() {
             "", 
             productType,
             false,
-            activeTab
+            activeTab,
+            image 
          );
          
          setRedesigns(redesigns);
          setStage(ProcessStage.COMPLETE);
          
-         // Send to Google Sheet
-         sendDataToSheet(
-            redesigns, 
-            analysisResult.redesignPrompt, 
-            analysisResult.description || "N/A",
-            username
-         ).catch(e => console.error("Sheet logging failed silently", e));
-
-         addToHistory(
-            image, 
-            cleaned, 
-            analysisResult, 
-            redesigns, 
-            productType, 
-            designMode, 
-            RopeType.NONE,
-            activeTab
-         );
+         const similarity = activeTab === AppTab.TSHIRT ? "50-60% (Breakthrough)" : "Auto";
+         sendDataToSheet(redesigns, analysisResult.redesignPrompt, analysisResult.description || "N/A", username, productType, similarity).catch(e => console.error("Logging failed", e));
       }
 
     } catch (err: any) {
@@ -362,18 +310,11 @@ function App() {
       if (!generatedRedesigns) return;
       const historyStack = redesignHistory[index];
       if (!historyStack || historyStack.length === 0) return;
-
       const currentImage = generatedRedesigns[index];
       const previousImage = historyStack[historyStack.length - 1];
       const newHistory = historyStack.slice(0, -1);
-
-      setRedoHistory(prev => ({
-          ...prev,
-          [index]: [...(prev[index] || []), currentImage]
-      }));
-
+      setRedoHistory(prev => ({ ...prev, [index]: [...(prev[index] || []), currentImage] }));
       setRedesignHistory(prev => ({ ...prev, [index]: newHistory }));
-
       const newRedesigns = [...generatedRedesigns];
       newRedesigns[index] = previousImage;
       setRedesigns(newRedesigns);
@@ -383,18 +324,11 @@ function App() {
       if (!generatedRedesigns) return;
       const redoStack = redoHistory[index];
       if (!redoStack || redoStack.length === 0) return;
-
       const currentImage = generatedRedesigns[index];
       const nextImage = redoStack[redoStack.length - 1];
       const newRedoStack = redoStack.slice(0, -1);
-
-      setRedesignHistory(prev => ({
-          ...prev,
-          [index]: [...(prev[index] || []), currentImage]
-      }));
-
+      setRedesignHistory(prev => ({ ...prev, [index]: [...(prev[index] || []), currentImage] }));
       setRedoHistory(prev => ({ ...prev, [index]: newRedoStack }));
-
       const newRedesigns = [...generatedRedesigns];
       newRedesigns[index] = nextImage;
       setRedesigns(newRedesigns);
@@ -402,20 +336,15 @@ function App() {
 
   const handleRemix = async (instruction: string) => {
     if (selectedRedesignIndex === null || !generatedRedesigns) return;
-    
     setIsRemixing(true);
     try {
       const currentImage = generatedRedesigns[selectedRedesignIndex];
       pushToUndoHistory(selectedRedesignIndex, currentImage);
-
       const newImage = await remixProductImage(currentImage, instruction);
-      
       const newRedesigns = [...generatedRedesigns];
       newRedesigns[selectedRedesignIndex] = newImage;
       setRedesigns(newRedesigns);
-      
     } catch (err: any) {
-      console.error("Remix failed", err);
       handleQuotaError(err);
     } finally {
       setIsRemixing(false);
@@ -424,10 +353,8 @@ function App() {
 
   const handleUpdateRedesign = (newImage: string) => {
       if (selectedRedesignIndex === null || !generatedRedesigns) return;
-      
       const currentImage = generatedRedesigns[selectedRedesignIndex];
       pushToUndoHistory(selectedRedesignIndex, currentImage);
-      
       const newRedesigns = [...generatedRedesigns];
       newRedesigns[selectedRedesignIndex] = newImage;
       setRedesigns(newRedesigns);
@@ -435,19 +362,15 @@ function App() {
 
   const handleRemoveBackground = async () => {
     if (selectedRedesignIndex === null || !generatedRedesigns) return;
-    
     setIsRemixing(true);
     try {
        const currentImage = generatedRedesigns[selectedRedesignIndex];
        pushToUndoHistory(selectedRedesignIndex, currentImage);
-
        const cleanedImage = await cleanupProductImage(currentImage);
-       
        const newRedesigns = [...generatedRedesigns];
        newRedesigns[selectedRedesignIndex] = cleanedImage;
        setRedesigns(newRedesigns);
     } catch (err: any) {
-       console.error("Background removal failed", err);
        handleQuotaError(err);
     } finally {
        setIsRemixing(false);
@@ -480,13 +403,14 @@ function App() {
     return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
   }
 
-  // ALLOW "admin" username to be Admin even if permissions not set in sheet yet (CASE INSENSITIVE AND TRIMMED)
   const isAdmin = permissions === 'ADMIN' || username.trim().toLowerCase() === 'admin';
-  
-  const canAccessPOD = permissions === 'ALL' || permissions === 'POD' || isAdmin;
-  const canAccessTshirt = permissions === 'ALL' || permissions === 'TSHIRT' || isAdmin;
+  const isMockupManager = permissions === 'MOCKUP_ADMIN';
+  const isMockupUploader = permissions === 'MOCKUP_UPLOADER';
+  const canAccessAdminPanel = isAdmin || isMockupManager || isMockupUploader;
 
-  // Title Logic
+  const canAccessPOD = permissions === 'ALL' || permissions === 'POD' || isAdmin || isMockupManager || isMockupUploader;
+  const canAccessTshirt = permissions === 'ALL' || permissions === 'TSHIRT' || isAdmin || isMockupManager || isMockupUploader;
+
   let mainTitle = "POD Product Reimagination";
   let mainDesc = "Professional AI Design Tool for POD & T-Shirts.";
   let titleGradient = "bg-gradient-to-r from-indigo-400 to-teal-400";
@@ -504,7 +428,6 @@ function App() {
     <div className="min-h-screen bg-slate-950 flex flex-col relative overflow-x-hidden text-slate-200">
       <Header onHistoryClick={() => setIsHistoryOpen(true)} useUltra={false} />
 
-      {/* User & Key Bar */}
       <div className="bg-slate-900 border-b border-slate-800 py-2 px-4 shadow-sm z-30 relative">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           
@@ -512,33 +435,27 @@ function App() {
              <div className="flex items-center bg-slate-800 px-3 py-1.5 rounded-full border border-slate-700">
                 <span className="w-2 h-2 rounded-full bg-green-500 mr-2"></span>
                 <span className="text-slate-300 font-bold">{username}</span>
-                {(permissions !== 'POD' && permissions !== 'ADMIN') && (
-                  <span className="ml-2 px-1.5 py-0.5 bg-slate-700 rounded text-[10px] text-slate-400">{permissions}</span>
-                )}
                 {isAdmin && (
                   <span className="ml-2 px-1.5 py-0.5 bg-indigo-900/50 text-indigo-300 border border-indigo-700/50 rounded text-[10px] font-bold">ADMIN</span>
+                )}
+                {isMockupManager && (
+                  <span className="ml-2 px-1.5 py-0.5 bg-orange-900/50 text-orange-300 border border-orange-700/50 rounded text-[10px] font-bold">MOCKUP MANAGER</span>
+                )}
+                {isMockupUploader && (
+                  <span className="ml-2 px-1.5 py-0.5 bg-teal-900/50 text-teal-300 border border-teal-700/50 rounded text-[10px] font-bold">MOCKUP UPLOADER</span>
                 )}
              </div>
           </div>
 
           <div className="flex items-center space-x-3">
-             {isAdmin && (
-                <>
-                  <button 
-                    onClick={() => setIsAdminDashboardOpen(true)}
-                    className="text-xs px-3 py-1.5 bg-teal-900/20 text-teal-300 hover:text-white hover:bg-teal-600 border border-teal-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-teal-900/10"
-                  >
-                    <Users size={14} className="mr-1.5" />
-                    Manage Users
-                  </button>
-                  <button 
-                    onClick={() => setIsApiKeyModalOpen(true)}
-                    className="text-xs px-3 py-1.5 bg-indigo-900/20 text-indigo-300 hover:text-white hover:bg-indigo-600 border border-indigo-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-indigo-900/10"
-                  >
-                    <Key size={14} className="mr-1.5" />
-                    System Key
-                  </button>
-                </>
+             {canAccessAdminPanel && (
+                <button 
+                  onClick={() => setIsAdminDashboardOpen(true)}
+                  className="text-xs px-3 py-1.5 bg-teal-900/20 text-teal-300 hover:text-white hover:bg-teal-600 border border-teal-500/30 rounded-md font-bold transition-all flex items-center shadow-lg shadow-teal-900/10"
+                >
+                  {isAdmin ? <Users size={14} className="mr-1.5" /> : <Settings size={14} className="mr-1.5" />}
+                  {isAdmin ? 'Manage Users' : (isMockupUploader ? 'Upload Assets' : 'Asset Management')}
+                </button>
             )}
             <button 
               onClick={handleLogout}
@@ -554,68 +471,44 @@ function App() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full z-10 mt-8 mb-4">
         <div className="flex justify-center">
             <div className="bg-slate-900 p-1.5 rounded-xl border border-slate-800 inline-flex shadow-inner">
-               
                {canAccessPOD && (
                   <button 
                     onClick={() => { setActiveTab(AppTab.POD); setDesignMode(DesignMode.NEW_CONCEPT); resetState(); }}
-                    className={`
-                      relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center
-                      ${activeTab === AppTab.POD 
-                        ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/10' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}
-                    `}
+                    className={`relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ${activeTab === AppTab.POD ? 'bg-gradient-to-br from-indigo-600 to-indigo-700 text-white shadow-lg shadow-indigo-500/20 ring-1 ring-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
                   >
                      <LayoutGrid size={16} className={`mr-2 ${activeTab === AppTab.POD ? 'text-white' : 'text-slate-500'}`} />
                      POD System
                   </button>
                )}
-
                {canAccessTshirt && (
                   <button 
                     onClick={() => { setActiveTab(AppTab.TSHIRT); setDesignMode(DesignMode.NEW_CONCEPT); resetState(); }}
-                    className={`
-                      relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ml-1
-                      ${activeTab === AppTab.TSHIRT
-                        ? 'bg-gradient-to-br from-purple-600 to-purple-700 text-white shadow-lg shadow-purple-500/20 ring-1 ring-white/10' 
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}
-                    `}
+                    className={`relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ml-1 ${activeTab === AppTab.TSHIRT ? 'bg-gradient-to-br from-purple-600 to-purple-700 text-white shadow-lg shadow-purple-500/20 ring-1 ring-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
                   >
                      <Shirt size={16} className={`mr-2 ${activeTab === AppTab.TSHIRT ? 'text-white' : 'text-slate-500'}`} />
                      T-Shirt Studio
                   </button>
                )}
-
-               {/* New Quick Tools Tab - Accessible to ALL users */}
                <button 
                   onClick={() => { setActiveTab(AppTab.TOOLS); setDesignMode(DesignMode.CLEAN_ONLY); resetState(); }}
-                  className={`
-                    relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ml-1
-                    ${activeTab === AppTab.TOOLS
-                      ? 'bg-gradient-to-br from-teal-600 to-emerald-600 text-white shadow-lg shadow-teal-500/20 ring-1 ring-white/10' 
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}
-                  `}
+                  className={`relative flex items-center px-6 py-2.5 rounded-lg text-sm font-bold transition-all duration-300 min-w-[140px] justify-center ml-1 ${activeTab === AppTab.TOOLS ? 'bg-gradient-to-br from-teal-600 to-emerald-600 text-white shadow-lg shadow-teal-500/20 ring-1 ring-white/10' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}
                 >
                     <Eraser size={16} className={`mr-2 ${activeTab === AppTab.TOOLS ? 'text-white' : 'text-slate-500'}`} />
                     Quick Tools
                 </button>
-
             </div>
         </div>
       </div>
 
       <main className="flex-grow max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 w-full z-10">
-        
         {stage === ProcessStage.IDLE && (
            <div className="mb-8 space-y-6 animate-fade-in">
               <div className="text-center mb-8">
                   <h2 className={`text-3xl font-bold bg-clip-text text-transparent mb-2 ${titleGradient}`}>
                      {mainTitle}
                   </h2>
-                  <p className="text-slate-500 max-w-lg mx-auto">
-                     {mainDesc}
-                  </p>
+                  <p className="text-slate-500 max-w-lg mx-auto">{mainDesc}</p>
               </div>
-
               {activeTab === AppTab.POD && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl mx-auto bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-lg">
                      <div className="flex flex-col">
@@ -624,91 +517,45 @@ function App() {
                             Design Goal
                         </label>
                         <div className="flex bg-slate-950 rounded-lg p-1 border border-slate-800">
-                            <button 
-                                onClick={() => setDesignMode(DesignMode.NEW_CONCEPT)}
-                                className={`flex-1 py-2 text-xs font-medium rounded-md transition-all flex items-center justify-center ${designMode === DesignMode.NEW_CONCEPT ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
-                            >
+                            <button onClick={() => setDesignMode(DesignMode.NEW_CONCEPT)} className={`flex-1 py-2 text-xs font-medium rounded-md transition-all flex items-center justify-center ${designMode === DesignMode.NEW_CONCEPT ? 'bg-indigo-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
                                 <Sparkles size={12} className="mr-1.5" />
                                 New Concept
                             </button>
-                            <button 
-                                onClick={() => setDesignMode(DesignMode.ENHANCE_EXISTING)}
-                                className={`flex-1 py-2 text-xs font-medium rounded-md transition-all flex items-center justify-center ${designMode === DesignMode.ENHANCE_EXISTING ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}
-                            >
+                            <button onClick={() => setDesignMode(DesignMode.ENHANCE_EXISTING)} className={`flex-1 py-2 text-xs font-medium rounded-md transition-all flex items-center justify-center ${designMode === DesignMode.ENHANCE_EXISTING ? 'bg-purple-600 text-white shadow' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
                                 <Paintbrush size={12} className="mr-1.5" />
                                 Enhance Existing
                             </button>
                         </div>
                      </div>
-    
                      <div className="flex flex-col">
                         <label className="text-xs font-bold text-slate-400 uppercase mb-2 flex items-center">
                             <Package className="w-3 h-3 mr-1 text-blue-400" />
                             Product Type
                         </label>
-                        <select
-                            value={productType}
-                            onChange={(e) => setProductType(e.target.value)}
-                            className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                        >
-                            {PRODUCT_TYPES.map(type => (
-                                <option key={type} value={type}>{type}</option>
-                            ))}
+                        <select value={productType} onChange={(e) => setProductType(e.target.value)} className="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-lg p-2.5 focus:ring-2 focus:ring-indigo-500 outline-none">
+                            {PRODUCT_TYPES.map(type => <option key={type} value={type}>{type}</option>)}
                         </select>
                      </div>
-                  </div>
-              )}
-
-              {/* Tools Tab Specific Header */}
-              {activeTab === AppTab.TOOLS && (
-                  <div className="max-w-xl mx-auto bg-slate-900/50 p-6 rounded-xl border border-teal-900/30 flex flex-col items-center text-center">
-                      <div className="p-3 bg-teal-900/20 rounded-full mb-3 text-teal-400">
-                          <Scissors size={24} />
-                      </div>
-                      <h3 className="text-lg font-bold text-teal-100 mb-2">Remove Background & Ropes</h3>
-                      <p className="text-sm text-slate-400 mb-0">
-                          Upload any product image. The AI will automatically isolate the object, remove the background, and erase hanging strings/ropes.
-                      </p>
                   </div>
               )}
            </div>
         )}
 
         {stage === ProcessStage.IDLE ? (
-          <div className="max-w-2xl mx-auto animate-fade-in delay-200">
-            <FileUpload onFileSelect={processFile} />
-          </div>
+          <div className="max-w-2xl mx-auto animate-fade-in delay-200"><FileUpload onFileSelect={processFile} /></div>
         ) : (
           <>
             {error && (
               <div className="mb-6 bg-red-950/30 border border-red-900/50 text-red-200 p-4 rounded-xl flex items-center shadow-lg animate-fade-in">
                 <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0 text-red-500" />
                 <span className="text-sm font-medium">{error}</span>
-                <button 
-                    onClick={() => setStage(ProcessStage.IDLE)} 
-                    className="ml-auto text-xs bg-red-900/50 hover:bg-red-800 px-3 py-1.5 rounded-lg transition-colors border border-red-800"
-                >
-                    Try Again
-                </button>
+                <button onClick={() => setStage(ProcessStage.IDLE)} className="ml-auto text-xs bg-red-900/50 hover:bg-red-800 px-3 py-1.5 rounded-lg border border-red-800">Try Again</button>
               </div>
             )}
-
-            <ResultsPanel
-              originalImage={originalImage || ''}
-              processedImage={processedImage}
-              analysis={analysis}
-              generatedRedesigns={generatedRedesigns}
-              stage={stage}
-              activeTab={activeTab}
-              onImageClick={handleRedesignClick}
-            />
-
+            <ResultsPanel originalImage={originalImage || ''} processedImage={processedImage} analysis={analysis} generatedRedesigns={generatedRedesigns} stage={stage} activeTab={activeTab} onImageClick={handleRedesignClick} />
             {stage === ProcessStage.COMPLETE && (
                <div className="mt-8 flex justify-center animate-fade-in">
-                  <button
-                    onClick={resetState}
-                    className="flex items-center px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-full font-bold shadow-lg transition-all border border-slate-700 hover:border-indigo-500"
-                  >
+                  <button onClick={resetState} className="flex items-center px-6 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-full font-bold shadow-lg transition-all border border-slate-700 hover:border-indigo-500">
                     <RefreshCw className="w-4 h-4 mr-2" />
                     Start New Process
                   </button>
@@ -718,24 +565,8 @@ function App() {
         )}
       </main>
 
-      <HistorySidebar
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
-        history={history}
-        onSelect={handleLoadHistory}
-        onDelete={handleDeleteHistory}
-      />
-
-      <ApiKeyModal
-          isOpen={isApiKeyModalOpen}
-          onClose={() => setIsApiKeyModalOpen(false)}
-      />
-
-      <AdminDashboard
-          isOpen={isAdminDashboardOpen}
-          onClose={() => setIsAdminDashboardOpen(false)}
-          currentUser={username}
-      />
+      <HistorySidebar isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} history={history} onSelect={handleLoadHistory} onDelete={handleDeleteHistory} isLoading={isLoadingHistory} />
+      <AdminDashboard isOpen={isAdminDashboardOpen} onClose={() => setIsAdminDashboardOpen(false)} currentUser={username} currentPermissions={permissions} />
 
       {generatedRedesigns && selectedRedesignIndex !== null && (
         <RedesignDetailModal

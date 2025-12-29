@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, Clock, Trash2, ChevronRight, Image as ImageIcon } from 'lucide-react';
+import { X, Clock, Trash2, ChevronRight, Image as ImageIcon, Loader2 } from 'lucide-react';
 import { HistoryItem, DesignMode } from '../types';
 
 interface HistorySidebarProps {
@@ -8,6 +8,7 @@ interface HistorySidebarProps {
   history: HistoryItem[];
   onSelect: (item: HistoryItem) => void;
   onDelete: (id: string, e: React.MouseEvent) => void;
+  isLoading?: boolean;
 }
 
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({
@@ -15,7 +16,8 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   onClose,
   history,
   onSelect,
-  onDelete
+  onDelete,
+  isLoading
 }) => {
   return (
     <>
@@ -33,7 +35,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
           <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900">
             <h2 className="text-lg font-bold text-slate-200 flex items-center">
               <Clock className="w-5 h-5 mr-2 text-indigo-500" />
-              History
+              Design Cloud History
             </h2>
             <button 
               onClick={onClose}
@@ -44,11 +46,16 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin scrollbar-thumb-slate-700">
-            {history.length === 0 ? (
+            {isLoading ? (
+               <div className="text-center py-20 text-slate-500">
+                 <Loader2 className="w-8 h-8 mx-auto mb-4 animate-spin text-indigo-500" />
+                 <p className="text-sm font-medium">Synchronizing designs from cloud...</p>
+               </div>
+            ) : history.length === 0 ? (
               <div className="text-center py-10 text-slate-600">
                 <Clock className="w-12 h-12 mx-auto mb-3 opacity-20" />
                 <p>No history yet.</p>
-                <p className="text-xs mt-1">Completed analyses will appear here.</p>
+                <p className="text-xs mt-1">Cloud designs will appear here.</p>
               </div>
             ) : (
               history.map((item) => (
@@ -71,7 +78,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     )}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-3">
                       <span className="text-white text-xs font-medium flex items-center">
-                        Load Result <ChevronRight size={12} className="ml-1" />
+                        Open Project <ChevronRight size={12} className="ml-1" />
                       </span>
                     </div>
                   </div>
@@ -81,15 +88,9 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                       <span className="text-xs font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full truncate max-w-[140px] border border-slate-700" title={item.productType}>
                         {item.productType}
                       </span>
-                      {item.designMode === DesignMode.ENHANCE_EXISTING ? (
-                        <span className="text-[10px] font-bold text-purple-400 bg-purple-900/30 px-2 py-0.5 rounded-full border border-purple-800">
-                          Enhance
-                        </span>
-                      ) : (
-                         <span className="text-[10px] font-bold text-indigo-400 bg-indigo-900/30 px-2 py-0.5 rounded-full border border-indigo-800">
-                          New Concept
-                        </span>
-                      )}
+                      <span className="text-[10px] font-bold text-slate-500 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-800">
+                         By {item.username || 'Unknown'}
+                      </span>
                     </div>
                     
                     <div className="flex justify-end mt-2">

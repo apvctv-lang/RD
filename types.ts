@@ -43,6 +43,7 @@ export interface AppState {
   isReviewModalOpen: boolean;
 }
 
+// Fix: Added missing username property to HistoryItem interface to satisfy HistorySidebar component requirements
 export interface HistoryItem {
   id: string;
   timestamp: number;
@@ -54,6 +55,7 @@ export interface HistoryItem {
   designMode: DesignMode;
   ropeType?: RopeType;
   tab?: AppTab; // New field
+  username?: string;
 }
 
 export enum ProcessStage {

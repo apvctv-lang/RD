@@ -2,6 +2,7 @@
 // --- CẤU HÌNH ---
 var SPECIFIC_SHEET_ID = null; 
 var FOLDER_NAME = "ProductPerfect_Images"; 
+var MOCKUP_FOLDER_NAME = "ProductPerfect_MockupTemplates";
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
@@ -30,6 +31,16 @@ function doPost(e) {
       result = handleGetUsers(doc, requestData);
     } else if (action === 'update_permission') {
       result = handleUpdatePermission(doc, requestData);
+    } else if (action === 'save_mockup') {
+      result = handleSaveMockup(doc, requestData);
+    } else if (action === 'get_mockups') {
+      result = handleGetMockups(doc);
+    } else if (action === 'log_final_mockup') {
+      result = handleLogFinalMockup(doc, requestData);
+    } else if (action === 'get_image_base64') {
+      result = handleGetImageBase64(requestData);
+    } else if (action === 'get_designs') {
+      result = handleGetDesigns(doc, requestData);
     }
 
     return ContentService
@@ -51,17 +62,80 @@ function doGet(e) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// --- CONFIG MANAGEMENT (API KEY) ---
+// --- CÁC HÀM XỬ LÝ ---
+
+function handleGetDesigns(doc, data) {
+  var sheet = doc.getSheetByName('Designs');
+  if (!sheet) return { status: 'success', data: [] };
+  var values = sheet.getDataRange().getValues();
+  var designs = [];
+  var isAdmin = data.isAdmin;
+  var username = data.username;
+  
+  for (var i = 1; i < values.length; i++) {
+    var owner = values[i][1];
+    if (isAdmin || owner === username) {
+      designs.push({
+        id: "sheet_" + i,
+        timestamp: values[i][0],
+        username: owner,
+        productType: values[i][2],
+        similarity: values[i][3],
+        prompt: values[i][4],
+        description: values[i][5],
+        images: [values[i][6], values[i][7], values[i][8], values[i][9], values[i][10], values[i][11]].filter(function(v) { return !!v && v.indexOf("http") === 0; }),
+        imageBase64: null 
+      });
+    }
+  }
+  return { status: 'success', data: designs.reverse() }; 
+}
+
+function handleGetImageBase64(data) {
+  try {
+    var url = data.url;
+    var fileId = "";
+    
+    // Tách File ID từ các loại URL Google Drive khác nhau
+    if (url.indexOf("id=") !== -1) {
+      fileId = url.split("id=")[1].split("&")[0];
+    } else if (url.indexOf("/file/d/") !== -1) {
+      fileId = url.split("/file/d/")[1].split("/")[0];
+    } else if (url.indexOf("/d/") !== -1) {
+      fileId = url.split("/d/")[1].split("/")[0];
+    } else {
+      fileId = url; // Giả định là ID trực tiếp
+    }
+    
+    var file = DriveApp.getFileById(fileId);
+    var blob = file.getBlob();
+    var base64 = Utilities.base64Encode(blob.getBytes());
+    var mime = blob.getContentType();
+    
+    return { 
+      status: 'success', 
+      base64: "data:" + mime + ";base64," + base64 
+    };
+  } catch (e) {
+    // Fallback: Nếu không phải Google Drive, thử fetch URL trực tiếp
+    try {
+      var response = UrlFetchApp.fetch(data.url);
+      var blob = response.getBlob();
+      var base64 = Utilities.base64Encode(blob.getBytes());
+      return { status: 'success', base64: "data:" + blob.getContentType() + ";base64," + base64 };
+    } catch (err) {
+      return { status: 'error', message: "Proxy Image Error: " + e.toString() };
+    }
+  }
+}
+
 function handleSaveConfig(doc, data) {
   var sheet = doc.getSheetByName('Config');
   if (!sheet) {
     sheet = doc.insertSheet('Config');
-    sheet.appendRow(['System_API_Key']); // Header
+    sheet.appendRow(['System_API_Key']); 
   }
-  
-  // Clear old key and set new one in cell A2
   sheet.getRange('A2').setValue(data.apiKey);
-  
   return { status: 'success', message: 'API Key hệ thống đã được cập nhật!' };
 }
 
@@ -71,7 +145,6 @@ function getSystemApiKey(doc) {
   return sheet.getRange('A2').getValue();
 }
 
-// --- LOGGING HELPER ---
 function logAccess(doc, username, action, ip) {
   try {
     var sheet = doc.getSheetByName('AccessLogs');
@@ -80,20 +153,14 @@ function logAccess(doc, username, action, ip) {
       sheet.appendRow(['Time', 'User', 'Action', 'IP Address']);
     }
     sheet.appendRow([new Date(), username, action, ip || 'Unknown']);
-  } catch (e) {
-    // Ignore logging errors
-  }
+  } catch (e) {}
 }
 
-// --- USER MANAGEMENT ---
-
 function ensureUserSheetHeaders(sheet) {
-  // Ensure headers exist: Username, Password, Created At, Permissions, Last IP, Last Login, Last Active, Current Status
   var headers = sheet.getRange(1, 1, 1, 8).getValues()[0];
   if (headers[0] !== 'Username') {
     sheet.appendRow(['Username', 'Password', 'Created At', 'Permissions', 'Last IP', 'Last Login', 'Last Active', 'Current Status']);
   } else if (headers.length < 8 || headers[7] !== 'Current Status') {
-     // If upgrading from old version, set header for col 8
      sheet.getRange(1, 8).setValue('Current Status');
   }
 }
@@ -101,9 +168,7 @@ function ensureUserSheetHeaders(sheet) {
 function handleGetUsers(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) return { status: 'error', message: 'Chưa có dữ liệu người dùng.' };
-  
   var users = sheet.getDataRange().getValues();
-  // Remove header
   var userList = [];
   for (var i = 1; i < users.length; i++) {
     userList.push({
@@ -113,224 +178,194 @@ function handleGetUsers(doc, data) {
       lastIp: users[i][4] || '',
       lastLogin: users[i][5] || '',
       lastActive: users[i][6] || '',
-      currentStatus: users[i][7] || 'Offline' // Get Status
+      currentStatus: users[i][7] || 'Offline'
     });
   }
-  
   return { status: 'success', users: userList };
 }
 
 function handleUpdatePermission(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) return { status: 'error', message: 'Lỗi dữ liệu.' };
-
   var targetUser = data.targetUser;
   var newPermission = data.newPermission;
-  
   var users = sheet.getDataRange().getValues();
   var found = false;
-  
   for (var i = 1; i < users.length; i++) {
     if (users[i][0] == targetUser) {
-      // Column D (index 3) is permissions (Row is i+1)
       sheet.getRange(i + 1, 4).setValue(newPermission);
       found = true;
       break;
     }
   }
-  
-  if (found) {
-    return { status: 'success', message: 'Cập nhật quyền thành công!' };
-  } else {
-    return { status: 'error', message: 'Không tìm thấy user.' };
-  }
+  return found ? { status: 'success', message: 'Cập nhật quyền thành công!' } : { status: 'error', message: 'Không tìm thấy user.' };
 }
-
-// --- AUTHENTICATION & TRACKING ---
 
 function handleRegister(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) {
     sheet = doc.insertSheet('Users');
     ensureUserSheetHeaders(sheet);
-  } else {
-    ensureUserSheetHeaders(sheet);
   }
-
   var username = data.username ? data.username.toString().trim() : "";
   var password = data.password ? data.password.toString().trim() : "";
   var userIp = data.ip || "Unknown";
-
   if (!username || !password) return { status: 'error', message: 'Thiếu thông tin đăng ký' };
-
   var users = sheet.getDataRange().getValues();
   for (var i = 1; i < users.length; i++) {
-    if (users[i][0] == username) {
-      return { status: 'error', message: 'Tài khoản đã tồn tại!' };
-    }
+    if (users[i][0] == username) return { status: 'error', message: 'Tài khoản đã tồn tại!' };
   }
-
-  // Permissions defaults to PENDING
   sheet.appendRow([username, password, new Date(), 'PENDING', '', '', '', 'Offline']);
-  
-  // Log Access
   logAccess(doc, username, 'Register', userIp);
-
-  return { status: 'success', message: 'Đăng ký thành công! Vui lòng chờ Admin duyệt.' };
+  return { status: 'success', message: 'Đăng ký thành công! Vui lòng chờ Admin duyệt tài khoản trước khi đăng nhập.' };
 }
 
 function handleLogin(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) return { status: 'error', message: 'Chưa có dữ liệu người dùng.' };
-
-  ensureUserSheetHeaders(sheet); // Make sure Col 8 exists
-
+  ensureUserSheetHeaders(sheet);
   var username = data.username ? data.username.toString().trim() : "";
   var password = data.password ? data.password.toString().trim() : "";
   var userIp = data.ip || "Unknown";
   var timestamp = new Date();
-
   var users = sheet.getDataRange().getValues();
-  
   for (var i = 1; i < users.length; i++) {
     if (users[i][0] == username && users[i][1] == password) {
-      var perms = "PENDING"; 
-      if (users[i].length > 3 && users[i][3]) {
-          perms = users[i][3].toString();
-      }
-      
+      var perms = users[i][3] || "PENDING";
       if (perms === 'PENDING') return { status: 'error', message: 'Tài khoản đang chờ duyệt.' };
       if (perms === 'BLOCK') return { status: 'error', message: 'Tài khoản đã bị khóa.' };
-      
-      // Update IP (Col 5), Last Login (Col 6), Last Active (Col 7), Status (Col 8)
       sheet.getRange(i + 1, 5).setValue(userIp);
       sheet.getRange(i + 1, 6).setValue(timestamp);
       sheet.getRange(i + 1, 7).setValue(timestamp);
       sheet.getRange(i + 1, 8).setValue('Online');
-      
-      // Log Access
       logAccess(doc, username, 'Login', userIp);
-
-      var systemKey = getSystemApiKey(doc);
-
       return { 
         status: 'success', 
         message: 'Đăng nhập thành công!',
-        user: { 
-          username: username,
-          permissions: perms,
-          systemKey: systemKey
-        }
+        user: { username: username, permissions: perms, systemKey: getSystemApiKey(doc) }
       };
     }
   }
-
   return { status: 'error', message: 'Sai tên đăng nhập hoặc mật khẩu.' };
 }
 
 function handleLogout(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) return { status: 'error' };
-
   var username = data.username;
-  var ip = data.ip || 'Unknown';
-
   var users = sheet.getDataRange().getValues();
-  
   for (var i = 1; i < users.length; i++) {
     if (users[i][0] == username) {
-      // Set Status (Col 8) to 'Offline'
       sheet.getRange(i + 1, 8).setValue('Offline');
-      
-      // Log Access
-      logAccess(doc, username, 'Logout', ip);
-      
+      logAccess(doc, username, 'Logout', data.ip || 'Unknown');
       return { status: 'success' };
     }
   }
-  return { status: 'error', message: 'User not found' };
+  return { status: 'error' };
 }
 
 function handleHeartbeat(doc, data) {
   var sheet = doc.getSheetByName('Users');
   if (!sheet) return { status: 'error' };
-
   var username = data.username;
-  var userIp = data.ip; 
-  var timestamp = new Date();
-  
   var users = sheet.getDataRange().getValues();
   for (var i = 1; i < users.length; i++) {
     if (users[i][0] == username) {
-      // Update Last Active (Col 7) and Status (Col 8)
-      sheet.getRange(i + 1, 7).setValue(timestamp);
-      sheet.getRange(i + 1, 8).setValue('Online'); 
-      if (userIp) sheet.getRange(i + 1, 5).setValue(userIp);
+      sheet.getRange(i + 1, 7).setValue(new Date());
+      sheet.getRange(i + 1, 8).setValue('Online');
       return { status: 'success' };
     }
   }
-  return { status: 'error', message: 'User not found' };
+  return { status: 'error' };
 }
-
-// --- XỬ LÝ LƯU DESIGN & UPLOAD ẢNH ---
 
 function handleLogDesign(doc, data) {
   var sheet = doc.getSheetByName('Designs');
   if (!sheet) {
     sheet = doc.insertSheet('Designs');
-    sheet.appendRow(['Timestamp', 'Username', 'Prompt', 'Description', 'Image 1', 'Image 2', 'Image 3', 'Image 4', 'Image 5', 'Image 6']);
+    sheet.appendRow(['Timestamp', 'Username', 'Product Type', 'Similarity Target', 'Prompt', 'Description', 'Image 1', 'Image 2', 'Image 3', 'Image 4', 'Image 5', 'Image 6']); 
   }
-
-  // 1. Lấy hoặc tạo thư mục Drive
   var folders = DriveApp.getFoldersByName(FOLDER_NAME);
-  var folder;
-  if (folders.hasNext()) {
-    folder = folders.next();
-  } else {
-    folder = DriveApp.createFolder(FOLDER_NAME);
-  }
-
-  // 2. Upload Ảnh
+  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(FOLDER_NAME);
   var imageUrls = [];
   var images = data.images || [];
   var timestamp = new Date();
   var username = data.username || 'Anonymous';
-
   for (var i = 0; i < 6; i++) {
     if (i < images.length && images[i]) {
       try {
-        var base64Data = images[i].split(",")[1]; 
-        if (!base64Data) base64Data = images[i];
-
+        var base64Data = images[i].split(",")[1] || images[i];
         var decodedBlob = Utilities.base64Decode(base64Data);
-        var fileName = username + "_Option_" + (i+1) + "_" + timestamp.getTime() + ".png";
-        
-        var file = folder.createFile(Utilities.newBlob(decodedBlob, "image/png", fileName));
+        var file = folder.createFile(Utilities.newBlob(decodedBlob, "image/png", username + "_Option_" + (i+1) + "_" + timestamp.getTime() + ".png"));
         file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-        imageUrls.push(file.getUrl()); 
-
-      } catch (err) {
-        imageUrls.push("Error: " + err.toString());
-      }
-    } else {
-      imageUrls.push(""); 
-    }
+        imageUrls.push("https://drive.google.com/thumbnail?id=" + file.getId() + "&sz=w2500");
+      } catch (err) { imageUrls.push("Error: " + err.toString()); }
+    } else { imageUrls.push(""); }
   }
+  sheet.appendRow([timestamp, username, data.productType || 'Unknown', data.similarity || 'N/A', data.prompt, data.description, imageUrls[0], imageUrls[1], imageUrls[2], imageUrls[3], imageUrls[4], imageUrls[5]]);
+  return { status: 'success' };
+}
 
-  var rowData = [
-    timestamp,
-    username,
-    data.prompt,
-    data.description,
-    imageUrls[0],
-    imageUrls[1],
-    imageUrls[2],
-    imageUrls[3],
-    imageUrls[4],
-    imageUrls[5]
-  ];
+function handleSaveMockup(doc, data) {
+  var sheet = doc.getSheetByName('MockupTemplates');
+  if (!sheet) {
+    sheet = doc.insertSheet('MockupTemplates');
+    sheet.appendRow(['StoreName', 'MockupName', 'ImageUrl', 'CreatedBy', 'Timestamp']); 
+  }
+  var folders = DriveApp.getFoldersByName(MOCKUP_FOLDER_NAME);
+  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(MOCKUP_FOLDER_NAME);
+  var base64Data = data.image.split(",")[1] || data.image;
+  try {
+    var decodedBlob = Utilities.base64Decode(base64Data);
+    var file = folder.createFile(Utilities.newBlob(decodedBlob, "image/png", data.storeName + "_" + data.mockupName + "_" + new Date().getTime() + ".png"));
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var url = "https://drive.google.com/thumbnail?id=" + file.getId() + "&sz=w1000";
+    sheet.appendRow([data.storeName, data.mockupName, url, data.username || 'Admin', new Date()]);
+    return { status: 'success', url: url };
+  } catch (err) { return { status: 'error', message: err.toString() }; }
+}
 
-  sheet.appendRow(rowData);
+function handleGetMockups(doc) {
+  var sheet = doc.getSheetByName('MockupTemplates');
+  if (!sheet) return { status: 'success', data: [] };
+  var values = sheet.getDataRange().getValues();
+  var mockups = [];
+  for (var i = 1; i < values.length; i++) {
+    var rawUrl = values[i][2];
+    var processedUrl = rawUrl;
+    
+    if (rawUrl && rawUrl.indexOf("drive.google.com") !== -1) {
+      var fileId = "";
+      if (rawUrl.indexOf("id=") !== -1) {
+        fileId = rawUrl.split("id=")[1].split("&")[0];
+      } else if (rawUrl.indexOf("/file/d/") !== -1) {
+        fileId = rawUrl.split("/file/d/")[1].split("/")[0];
+      }
+      if (fileId) processedUrl = "https://drive.google.com/thumbnail?id=" + fileId + "&sz=w1000";
+    }
 
-  return { status: 'success', message: 'Đã lưu thiết kế và upload ảnh thành công!' };
+    mockups.push({ storeName: values[i][0], name: values[i][1], url: processedUrl, base64: null }); 
+  }
+  return { status: 'success', data: mockups };
+}
+
+function handleLogFinalMockup(doc, data) {
+  var sheet = doc.getSheetByName('FinalMockups');
+  if (!sheet) {
+    sheet = doc.insertSheet('FinalMockups');
+    sheet.appendRow(['Time', 'User', 'Design Name', 'Result Image URL']); 
+  }
+  var folders = DriveApp.getFoldersByName(FOLDER_NAME);
+  var folder = folders.hasNext() ? folders.next() : DriveApp.createFolder(FOLDER_NAME);
+  try {
+    var base64Data = data.image.split(",")[1] || data.image;
+    var decodedBlob = Utilities.base64Decode(base64Data);
+    var file = folder.createFile(Utilities.newBlob(decodedBlob, "image/png", "Final_" + data.username + "_" + new Date().getTime() + ".png"));
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    var url = "https://drive.google.com/thumbnail?id=" + file.getId() + "&sz=w2500";
+    sheet.appendRow([new Date(), data.username, data.designName || 'Unnamed', url]);
+    return { status: 'success', url: url };
+  } catch (err) {
+    return { status: 'error', message: err.toString() };
+  }
 }
